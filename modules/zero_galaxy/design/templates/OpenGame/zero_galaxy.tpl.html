@@ -1,0 +1,52 @@
+<h1>{PAGE_HEADER}</h1>
+
+<form action="index.php" method="get">
+  <input type="hidden" name="page" value="zero_galaxy">
+  <table width="530">
+    <tr>
+      <th>{L_zero_galaxy_region}: 0</th>
+      <th>
+        <label for="zero_system">{L_zero_galaxy_system}</label>
+        <input id="zero_system" name="system" type="number" min="1" max="{ZERO_MAX_SYSTEM}" value="{ZERO_SYSTEM}" style="width: 5em">
+        / {ZERO_MAX_SYSTEM}
+      </th>
+      <th><input type="submit" value="{L_zero_galaxy_go}"></th>
+    </tr>
+    <tr>
+      <th>
+        <!-- IF ZERO_PREVIOUS_SYSTEM -->
+        <a href="index.php?page=zero_galaxy&amp;system={ZERO_PREVIOUS_SYSTEM}" rel="prev">&larr; {L_zero_galaxy_previous}</a>
+        <!-- ELSE -->
+        <span class="neutral">&larr; {L_zero_galaxy_previous}</span>
+        <!-- ENDIF -->
+      </th>
+      <th><a href="galaxy.php?mode=0">{L_zero_galaxy_back}</a></th>
+      <th>
+        <!-- IF ZERO_NEXT_SYSTEM -->
+        <a href="index.php?page=zero_galaxy&amp;system={ZERO_NEXT_SYSTEM}" rel="next">{L_zero_galaxy_next} &rarr;</a>
+        <!-- ELSE -->
+        <span class="neutral">{L_zero_galaxy_next} &rarr;</span>
+        <!-- ENDIF -->
+      </th>
+    </tr>
+  </table>
+</form>
+
+<br>
+
+<table width="530" id="zero_galaxy_map">
+  <tr><td class="c" colspan="3">{L_zero_galaxy_system} [0:{ZERO_SYSTEM}]</td></tr>
+  <tr>
+    <th>{L_zero_galaxy_position}</th>
+    <th>{L_zero_galaxy_coordinates}</th>
+    <th>{L_zero_galaxy_state}</th>
+  </tr>
+  <!-- BEGIN zero_position -->
+  <tr class="zero_galaxy_position">
+    <th>{zero_position.NUMBER}</th>
+    <th>[{zero_position.COORDINATES}]</th>
+    <td class="c_c neutral">{L_zero_galaxy_empty}</td>
+  </tr>
+  <!-- END zero_position -->
+  <tr><td colspan="3" class="c_c">{L_zero_galaxy_quiet}</td></tr>
+</table>
