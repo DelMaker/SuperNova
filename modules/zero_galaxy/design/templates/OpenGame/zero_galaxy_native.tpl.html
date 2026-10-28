@@ -1,0 +1,23 @@
+<style>
+  .zero-galaxy-native [go],
+  .zero-galaxy-native [href*="mode=name"],
+  .zero-galaxy-native .ownmissile,
+  .zero-galaxy-native .ownharvest,
+  .zero-galaxy-native .ownexpedition,
+  .zero-galaxy-native #uni_missile_form { display: none !important; }
+  .zero-galaxy-native .uni_show_user,
+  .zero-galaxy-native .uni_show_ally { cursor: default; }
+  .zero-galaxy-native .zero-galaxy-next { margin-top: 0.35em; font-size: 0.9em; font-weight: normal; }
+  .zero-galaxy-native .zero-galaxy-countdown { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .zero-galaxy-native .zero-galaxy-phase-energy .uni_show_planet { cursor: default; }
+  .zero-galaxy-native .zero-galaxy-phase-closed .uni_show_planet { cursor: default; }
+</style>
+
+<div id="zero_galaxy_native" class="zero-galaxy-native">
+  <!-- INCLUDE universe -->
+  <!-- IF ! ZERO_HAS_RIFTS -->
+  <p class="neutral">{L_zero_galaxy_quiet}</p>
+  <!-- ENDIF -->
+</div>
+<script type="application/json" id="zero_galaxy_data">{ZERO_RIFTS_JSON}</script>
+<script src="{ZERO_SCRIPT_URL}" defer></script>

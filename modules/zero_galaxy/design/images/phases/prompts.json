@@ -1,0 +1,47 @@
+{
+  "generator": "built-in image_gen",
+  "transparent_background": true,
+  "assets": [
+    {
+      "file": "energy.png",
+      "label": "Всплески энергии",
+      "steps": [
+        {
+          "reference": "active.png",
+          "prompt": "Use case: precise-object-edit. Image 1 is the edit target and style reference: the active rift planet sprite.\nCreate the ENERGY SURGES phase of this same game asset set. Remove the planet completely: no material world exists yet. Preserve the violet and icy-cyan dimensional halo, its lower-left to upper-right elliptical tilt, central framing, realistic pre-rendered science-fiction style and upper-left light direction. Reveal an empty dark dimensional aperture inside the ring, crossed by a few bold cyan-white energy forks. Make this an energetic portal beginning to form, with an uneven swelling edge and restrained short radial flashes. The central aperture should read as an empty passage, with no planet or spherical body. Strong coherent silhouette readable at 48x48 pixels.\nMaintain the same square canvas and scale, about 78 percent occupied by the entire uncropped portal. Genuine transparent alpha outside the ring and its softly fading glow, no background scene or starfield. No text, labels, symbols, borders, collage, ships, people, moons, material debris or watermark. Output one standalone transparent PNG."
+        }
+      ]
+    },
+    {
+      "file": "active.png",
+      "label": "Планета разлома",
+      "steps": [
+        {
+          "reference": null,
+          "prompt": "Use case: stylized-concept.\nAsset type: a single square game sprite for a classic browser space strategy game, the ACTIVE RIFT PLANET phase of a four-phase lifecycle.\nSubject: one mysterious rocky alien planet fully materialized in front of a violet-cyan dimensional rift. A complete spherical world with dark slate continents, muted teal seas, thin pale clouds and sparse subtle amber artificial lights, viewed from orbit. A restrained luminous elliptical energy halo behind its silhouette establishes the rift motif. No moons.\nStyle: polished realistic pre-rendered science-fiction game artwork, believable planetary textures and atmospheric rim, clear iconic silhouette, dramatic but restrained. Match the visual language of classic space strategy planet thumbnails rather than a modern flat vector icon.\nComposition: one object centered on a square canvas, the entire planet and halo visible, occupies about 78 percent of the frame with generous transparent margins. Lighting from upper left. Recognizable at 48x48 pixels: bold large shapes, not dependent on tiny details. Violet and icy cyan glow with a dark teal-gray planet.\nBackground: genuinely transparent alpha everywhere outside the object and its softly fading halo. No starfield or rectangular background, no black backdrop. The center of the planet itself is opaque.\nConstraints: one standalone asset, no collage, no grid, no text, no labels, no borders, no interface elements, no watermark, no spaceships, no people. Export a crisp square PNG with preserved transparency."
+        }
+      ]
+    },
+    {
+      "file": "unstable.png",
+      "label": "Нестабильная планета разлома",
+      "steps": [
+        {
+          "reference": "active.png",
+          "prompt": "Use case: precise-object-edit. Image 1 is the edit target.\nCreate the UNSTABLE RIFT PLANET phase of the same game asset. Preserve the exact recognizable planet geography, globe size, rotation, framing, lighting direction, violet/cyan palette, realistic planetary texture and diagonal halo orientation. The entire planet must remain a complete intact sphere, not an explosion. Show that the dimensional connection is failing: the previously smooth halo is now jagged, partially segmented and warped; vivid violet-white energy arcs bridge the broken sections; narrow luminous violet and a few amber energy fissures crawl over the planet's atmosphere and silhouette. Slightly darken the surface to emphasize the disturbed glowing rim, while retaining the original recognizable land and water shapes. Distinct from the calm active image even at 48x48 pixels. Do not add moons or spacecraft.\nKeep the whole object uncropped with matching transparent margins and square canvas. Genuine transparent alpha outside the sphere and bounded fading energy glow. No rectangular backdrop, starfield, text, labels, UI, watermark, material debris or explosive planet destruction. Output one standalone transparent PNG."
+        }
+      ]
+    },
+    {
+      "file": "closed.png",
+      "label": "Закрытый разлом",
+      "steps": [
+        {
+          "reference": "energy.png",
+          "prompt": "Use case: precise-object-edit. Image 1 is the edit target: the energy-surges portal from the same four-phase game asset set.\nCreate the CLOSED RIFT phase. The world and open passage have completely vanished. Keep the same diagonal lower-left to upper-right orientation, centered square composition, violet-cyan visual identity and realistic pre-rendered science-fiction rendering, but collapse the aperture into a faint, thin, broken elliptical scar. Use only a few wispy violet and pale-blue residual energy arcs and a small quiet central glimmer, with wide clear gaps between arcs. No thick luminous membrane, no active lightning web across the center, no bright burst. It should read as a dying remnant, substantially calmer, dimmer and slimmer than the energy-surges image, still recognizable as the same phenomenon when reduced to 48x48 pixels. Outer remnants can span about 70 percent of the square canvas to retain consistent centered scale, but most of the interior and exterior are genuinely transparent.\nThere must be NO PLANET, moon, solid sphere, asteroids, salvageable debris or other matter. Preserve genuine transparent alpha, including the now-empty interior of the collapsed aperture and the background outside the faint softly fading arcs. No black rectangle or backdrop, no stars, no text, symbols, labels, UI, border, watermark or collage. Output one standalone transparent PNG."
+        }
+      ],
+      "selection": "Original generated ring with a central glimmer, selected by the user."
+    }
+  ]
+}
