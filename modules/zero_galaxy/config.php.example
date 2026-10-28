@@ -4,15 +4,45 @@ if (!defined('INSIDE')) {
   die();
 }
 
-// Copy to config.php. Omitted settings retain defaults.php values.
-// Changes apply on the next request; existing rifts retain their deadlines.
+// Скопируйте в config.php. Полное описание параметров: SETTINGS.md.
+// Только указанные поля заменяют defaults.php; изменения видны следующему запросу.
+// Уже созданные разломы сохраняют категорию, состав, ресурсы и сроки.
 $zero_galaxy_config = [
   'target_active_per_system' => 2,
   'tick_seconds' => 15,
   'generation_seconds' => 300,
-  'energy_seconds' => [1800, 3600],
-  'active_seconds' => [28800, 43200],
-  'unstable_seconds' => [7200, 10800],
-  'closed_seconds' => [3600, 7200],
   'refresh_seconds' => 30,
+  // Фиксированный лимит флота атакующего = начальная стоимость гарнизона * коэффициент.
+  'fleet_limit_multiplier' => 1.25,
+  'categories' => [
+    'tiny' => [
+      'weight' => 30,
+      'limit' => -1, // По всей галактике; -1 без лимита, 0 запрещает новое появление.
+      // ±20%: 64–96 млн. Лимит атаки без бонусов: 80–120 млн, в среднем 100 млн.
+      'garrison_points' => ['mean' => 80000000, 'spread_percent' => 20],
+      'fleet_share_percent' => 60,
+      'resource_percent' => 75, // От фактической начальной стоимости только флота.
+      'resource_spread_percent' => 20,
+      'tech' => [106 => ['mean' => 8, 'spread' => 2]], // Остальные технологии сохранят defaults.
+      'phases_hours' => [
+        'energy' => ['mean' => 0.75, 'spread_percent' => 20],
+        'active' => ['mean' => 10, 'spread_percent' => 20],
+        'unstable' => ['mean' => 2.5, 'spread_percent' => 20],
+        'closed' => ['mean' => 1.5, 'spread_percent' => 20],
+      ],
+      // Это доли бюджета стоимости, не доли количества. 0 выключает конкретный ID.
+      // Здесь меняется лишь вес лёгкого истребителя; прочие веса сохраняются.
+      'fleet_weights' => [204 => 18],
+      'defence_weights' => [401 => 20],
+    ],
+    'huge' => ['limit' => 100],
+    'colossal' => ['limit' => 10],
+    'great' => ['limit' => 2, 'garrison_points' => ['mean' => 268154961162000]],
+  ],
+  // Устаревшие глобальные диапазоны секунд оставлены для старого Lifecycle API.
+  // Они НЕ заменяют categories.*.phases_hours при создании нового профиля.
+  // 'energy_seconds' => [1800, 3600],
+  // 'active_seconds' => [28800, 43200],
+  // 'unstable_seconds' => [7200, 10800],
+  // 'closed_seconds' => [3600, 7200],
 ];

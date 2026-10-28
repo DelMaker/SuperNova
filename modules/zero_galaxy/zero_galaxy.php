@@ -2,6 +2,9 @@
 
 use Modules\sn_module;
 use ZeroGalaxy\Settings;
+use ZeroGalaxy\Profile;
+use ZeroGalaxy\RiftFleetDispatcher;
+use ZeroGalaxy\NPCStatistics;
 use ZeroGalaxy\SpySender;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
@@ -15,7 +18,7 @@ class zero_galaxy extends sn_module {
   public function __construct($filename = __FILE__) {
     $this->manifest['package'] = 'universe';
     $this->manifest['name'] = 'zero_galaxy';
-    $this->manifest['version'] = '0.2.2';
+    $this->manifest['version'] = '0.3.0';
     $this->manifest['mvc']['model'][''] = ['callable' => 'route'];
     $this->manifest['mvc']['view']['zero_galaxy'] = ['callable' => 'render'];
     $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
@@ -38,6 +41,21 @@ class zero_galaxy extends sn_module {
     // The base module expects an entry for every registered MVC handler type.
     $this->manifest['mvc'] += array_fill_keys(array_keys($sn_mvc), []);
     parent::initialize();
+
+    try {
+      SN::$gc->extend('fleetDispatcher', function ($dispatcher, $gc) {
+        if (get_class($dispatcher) !== \Fleet\FleetDispatcher::class) {
+          error_log('Zero Galaxy: custom fleet dispatcher retained; information concealment adapter not installed');
+          return $dispatcher;
+        }
+
+        return new RiftFleetDispatcher($gc);
+      });
+    } catch (Throwable $error) {
+      // Another module may already have resolved the service. Never replace a
+      // frozen/custom dispatcher behind its back or alter ordinary missions.
+      error_log('Zero Galaxy dispatcher adapter: ' . $error->getMessage());
+    }
 
     // Signed fleet workers run before the normal authenticated model hook.
     // Reconcile NPC deadlines before the native dispatcher looks up its targets.
@@ -80,6 +98,7 @@ class zero_galaxy extends sn_module {
       if (!$this->storage) {
         try {
           $this->settings = Settings::load($this->config);
+          Profile::validateSettings($this->settings);
         } catch (InvalidArgumentException $error) {
           // A bad balance edit must not keep expired planets alive for fleets.
           error_log('Zero Galaxy configuration: ' . $error->getMessage());
@@ -89,6 +108,7 @@ class zero_galaxy extends sn_module {
       }
       $this->storage->tick(SN_TIME_NOW, $this->settings,
         max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet), $force);
+      NPCStatistics::sync(SN::$db->link, SN::$db->db_prefix, SN::$config);
       $this->worldError = null;
     } catch (Throwable $error) {
       $this->worldError = $error;

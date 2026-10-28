@@ -61,6 +61,45 @@
     }
     removeAll('#user_template [go], #ally_template [go], #ally_template a');
 
+    function hasProfile(rift) {
+      var category = rift.category;
+      return !!(category && typeof category.name === 'string' && category.name.trim()
+        && typeof category.color === 'string' && category.color.length === 7
+        && /^#[0-9a-fA-F]{6}$/.test(category.color)
+        && typeof rift.fleetLimit === 'string' && /^\d+$/.test(rift.fleetLimit));
+    }
+
+    function profileDetails(rift) {
+      if (!hasProfile(rift)) {
+        return null;
+      }
+      var category = rift.category;
+
+      var details = document.createElement('div');
+      details.className = 'zero-galaxy-profile';
+      // Essential layout must also work with an older compiled module template.
+      details.style.cssText = 'display:block;margin-top:0.35em;font-size:0.9em;font-weight:normal;';
+      var categoryText = document.createElement('span');
+      categoryText.className = 'zero-galaxy-category';
+      categoryText.style.display = 'block';
+      var indicator = document.createElement('span');
+      indicator.className = 'zero-galaxy-category-color';
+      indicator.style.cssText = 'display:inline-block;width:0.8em;height:0.8em;border:1px solid #fff;border-radius:50%;box-sizing:border-box;margin-right:0.4em;vertical-align:middle;';
+      indicator.style.backgroundColor = category.color;
+      indicator.setAttribute('aria-hidden', 'true');
+      categoryText.appendChild(indicator);
+      categoryText.appendChild(document.createTextNode(config.labels.category + ': ' + category.name));
+      details.appendChild(categoryText);
+
+      var limit = document.createElement('span');
+      limit.className = 'zero-galaxy-fleet-limit';
+      limit.style.cssText = 'display:block;margin-top:0.2em;white-space:nowrap;font-variant-numeric:tabular-nums;';
+      var formattedLimit = rift.fleetLimit.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+      limit.textContent = config.labels.fleetLimit + ': ' + formattedLimit + ' ' + config.labels.points;
+      details.appendChild(limit);
+      return details;
+    }
+
     for (var r = 0; r < config.rifts.length; r++) {
       var rift = config.rifts[r];
       rifts[rift.position] = rift;
@@ -85,9 +124,18 @@
       }
       var name = row.querySelector('.g_galaxy_row');
       if (name) {
+        var hasCategory = hasProfile(rift);
+        var nameText = name.querySelector('span[planet_type="1"]');
+        if (hasCategory && nameText) {
+          nameText.style.setProperty('color', rift.category.color, 'important');
+          if (rift.category.color.toLowerCase() === '#7b2cbf') {
+            nameText.style.textShadow = '0 0 2px rgba(255,255,255,0.85)';
+          }
+        }
         var details = document.createElement('div');
         details.className = 'zero-galaxy-next';
-        details.appendChild(document.createTextNode(rift.nextLabel + ': '));
+        details.style.cssText = 'display:block;margin-top:0.35em;font-size:0.9em;font-weight:normal;';
+        details.appendChild(document.createTextNode((hasCategory && rift.phase !== 'active' ? rift.phaseLabel + ' · ' : '') + rift.nextLabel + ': '));
         var countdown = document.createElement('span');
         countdown.className = 'zero-galaxy-countdown';
         countdown.setAttribute('data-next-at', rift.nextAt);
@@ -109,15 +157,23 @@
           return null;
         }
         var popup = nativePlanetPopup.call(this, that);
-        if (popup && popup.html && rift.imageUrl) {
+        if (popup && popup.html) {
           var content = document.createElement('div');
           content.innerHTML = popup.html;
           var image = content.querySelector('.uni_popup_planet img');
-          if (image) {
+          if (image && rift.imageUrl) {
             image.setAttribute('src', rift.imageUrl);
             image.setAttribute('alt', rift.phaseLabel);
-            popup.html = content.innerHTML;
           }
+          var popupProfile = profileDetails(rift);
+          var popupTable = content.querySelector('table.planet_template');
+          if (popupProfile && popupTable) {
+            var profileRow = popupTable.insertRow(1);
+            var profileCell = profileRow.insertCell(0);
+            profileCell.colSpan = 2;
+            profileCell.appendChild(popupProfile);
+          }
+          popup.html = content.innerHTML;
         }
         return popup;
       };

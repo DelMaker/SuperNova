@@ -7,6 +7,7 @@ if (PHP_SAPI !== 'cli') {
 
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
 
 use ZeroGalaxy\Lifecycle;
 use ZeroGalaxy\Storage;
@@ -49,7 +50,7 @@ if (($argv[1] ?? '') === '--worker') {
 
 $db = storageTestDb();
 $prefix = 'zg_test_' . bin2hex(random_bytes(5)) . '_';
-$tables = ['zero_galaxy_rifts', 'zero_galaxy_state', 'fleets', 'unit', 'planets', 'users'];
+$tables = ['zero_galaxy_rifts', 'zero_galaxy_state', 'zero_galaxy_npcs', 'fleets', 'unit', 'planets', 'users'];
 $assertions = 0;
 $check = function ($condition, $message) use (&$assertions) {
   $assertions++;

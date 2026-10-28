@@ -69,7 +69,7 @@ class SpySender {
 
       $sourceId = (int) $user['current_planet'];
       $targetId = (int) $rift['planet_id'];
-      $ownerId = (int) $state['npc_owner_id'];
+      $ownerId = (int) ($rift['npc_owner_id'] ?? 0) ?: (int) $state['npc_owner_id'];
       SN::$gc->db->lockRecords([
         'users' => [(int) $user['id'], $ownerId],
         'planets' => [$sourceId, $targetId],

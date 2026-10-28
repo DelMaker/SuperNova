@@ -19,6 +19,8 @@ class Storage {
   private $users;
   private $planets;
   private $units;
+  private $npcs;
+  private $fleets;
   private $ready = false;
 
   public function __construct(mysqli $db, string $prefix) {
@@ -31,6 +33,8 @@ class Storage {
     $this->users = $prefix . 'users';
     $this->planets = $prefix . 'planets';
     $this->units = $prefix . 'unit';
+    $this->npcs = $prefix . 'zero_galaxy_npcs';
+    $this->fleets = $prefix . 'fleets';
   }
 
   private function query(string $sql) {
@@ -66,8 +70,14 @@ class Storage {
       image VARCHAR(64) NOT NULL,
       config_snapshot TEXT NOT NULL,
       planet_id BIGINT UNSIGNED NULL DEFAULT NULL,
+      npc_owner_id BIGINT UNSIGNED NULL DEFAULT NULL,
       PRIMARY KEY (rift_id), UNIQUE KEY coordinates (system, position),
       KEY expiration (disappears_at), KEY materialized_planet (planet_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    $this->query("CREATE TABLE IF NOT EXISTS {$this->npcs} (
+      owner_id BIGINT UNSIGNED NOT NULL,
+      rift_id BIGINT UNSIGNED NOT NULL,
+      PRIMARY KEY (owner_id), UNIQUE KEY rift (rift_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
     $this->query("CREATE TABLE IF NOT EXISTS {$this->state} (
       id TINYINT UNSIGNED NOT NULL,
@@ -75,6 +85,7 @@ class Storage {
       next_generation_at BIGINT UNSIGNED NOT NULL DEFAULT 0,
       seeded_systems INT UNSIGNED NOT NULL DEFAULT 0,
       npc_owner_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      stats_hidden_ids TEXT NULL,
       PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
     // Preserve timelines from the earlier module-only draft.
@@ -83,6 +94,12 @@ class Storage {
     }
     if (!$this->query("SHOW COLUMNS FROM {$this->state} LIKE 'npc_owner_id'")->num_rows) {
       $this->query("ALTER TABLE {$this->state} ADD COLUMN IF NOT EXISTS npc_owner_id BIGINT UNSIGNED NOT NULL DEFAULT 0");
+    }
+    if (!$this->query("SHOW COLUMNS FROM {$this->rifts} LIKE 'npc_owner_id'")->num_rows) {
+      $this->query("ALTER TABLE {$this->rifts} ADD COLUMN IF NOT EXISTS npc_owner_id BIGINT UNSIGNED NULL DEFAULT NULL");
+    }
+    if (!$this->query("SHOW COLUMNS FROM {$this->state} LIKE 'stats_hidden_ids'")->num_rows) {
+      $this->query("ALTER TABLE {$this->state} ADD COLUMN IF NOT EXISTS stats_hidden_ids TEXT NULL");
     }
     $this->query("INSERT IGNORE INTO {$this->state} (id) VALUES (1)");
     $this->ready = true;
@@ -155,6 +172,78 @@ class Storage {
     return $planet;
   }
 
+  /** Research belongs to a player in the native engine, so each populated rift owns its immutable research. */
+  private function lockRiftNpc(array &$rift, array $profile, int $now): int {
+    $riftId = (int) $rift['rift_id'];
+    $ownerId = (int) ($rift['npc_owner_id'] ?? 0);
+    if (!$ownerId) {
+      $baseName = self::NPC_NAME . ' #' . $riftId;
+      if (!preg_match('/^.{1,32}$/uD', $baseName)) { $baseName = 'Разлом #' . $riftId; }
+      $name = $this->db->real_escape_string($baseName);
+      while ($this->query("SELECT id FROM {$this->users} WHERE username = '{$name}' LIMIT 1")->num_rows) {
+        // Even a 64-bit rift ID plus nonce fits the native 32-character name.
+        $name = $this->db->real_escape_string('#' . $riftId . ' ' . bin2hex(random_bytes(4)));
+      }
+      $password = $this->disabledPassword();
+      $this->query("INSERT INTO {$this->users}
+        (username, password, salt, authlevel, user_bot, galaxy, system, planet, id_planet, current_planet,
+         parent_account_id, parent_account_global, register_time, onlinetime, vacation, deltime, email, email_2)
+        VALUES ('{$name}', '{$password}', '', 0, " . self::NPC_BOT_TYPE . ", 0, 0, 0, 0, 0,
+          0, 0, {$now}, {$now}, 0, 0, '', '')");
+      $ownerId = (int) $this->db->insert_id;
+      $this->query("INSERT INTO {$this->npcs} (owner_id, rift_id) VALUES ({$ownerId}, {$riftId})");
+      foreach ($profile['tech'] as $id => $level) {
+        if ($level > 0) {
+          $this->query("INSERT INTO {$this->units}
+            (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
+            VALUES ({$ownerId}, 4, {$ownerId}, 100, " . (int) $id . ", " . (int) $level . ")");
+        }
+      }
+      $this->query("UPDATE {$this->rifts} SET npc_owner_id = {$ownerId} WHERE rift_id = {$riftId}");
+      $rift['npc_owner_id'] = $ownerId;
+    }
+    $this->verifyRiftNpc($ownerId, $riftId);
+    $this->query("UPDATE {$this->users} SET onlinetime = {$now} WHERE id = {$ownerId}");
+    return $ownerId;
+  }
+
+  private function verifyRiftNpc(int $ownerId, int $riftId): void {
+    $owner = $this->query("SELECT u.* FROM {$this->users} u JOIN {$this->npcs} n ON n.owner_id = u.id
+      WHERE n.owner_id = {$ownerId} AND n.rift_id = {$riftId} FOR UPDATE")->fetch_assoc();
+    if (!$owner || (int) $owner['user_bot'] !== self::NPC_BOT_TYPE || (int) $owner['authlevel'] !== 0
+      || (int) $owner['galaxy'] !== 0 || (int) $owner['id_planet'] !== 0 || (int) $owner['current_planet'] !== 0
+      || (int) $owner['parent_account_id'] !== 0 || (int) $owner['parent_account_global'] !== 0
+      || !preg_match('/^(?:' . preg_quote(self::NPC_NAME . ' #' . $riftId, '/') . '(?: [a-f0-9]{8})?|'
+        . preg_quote('Разлом #' . $riftId, '/') . '|#' . $riftId . ' [a-f0-9]{8})$/D', $owner['username'])
+      || strlen($owner['password']) !== 64
+      || $owner['password'][0] !== '!') {
+      throw new RuntimeException('Zero Galaxy per-rift NPC identity is invalid');
+    }
+  }
+
+  private function cleanupNpcs(): void {
+    $rows = $this->query("SELECT n.* FROM {$this->npcs} n LEFT JOIN {$this->rifts} r ON r.rift_id = n.rift_id
+      WHERE r.rift_id IS NULL ORDER BY n.owner_id FOR UPDATE");
+    while ($npc = $rows->fetch_assoc()) {
+      $ownerId = (int) $npc['owner_id'];
+      // Incoming and returning fleets still refer to their original target owner.
+      if ($this->query("SELECT fleet_id FROM {$this->fleets} WHERE fleet_owner = {$ownerId}
+        OR fleet_target_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows
+        || $this->query("SELECT id FROM {$this->planets} WHERE id_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows) {
+        continue;
+      }
+      $this->verifyRiftNpc($ownerId, (int) $npc['rift_id']);
+      if ($this->query("SELECT unit_id FROM {$this->units} WHERE unit_player_id = {$ownerId}
+        AND (unit_location_type <> 4 OR unit_location_id <> {$ownerId} OR unit_type <> 100) LIMIT 1 FOR UPDATE")->num_rows) {
+        throw new RuntimeException('Expired Zero Galaxy NPC contains unexpected units');
+      }
+      $this->query("DELETE FROM {$this->units} WHERE unit_player_id = {$ownerId}
+        AND unit_location_type = 4 AND unit_location_id = {$ownerId} AND unit_type = 100");
+      $this->query("DELETE FROM {$this->users} WHERE id = {$ownerId}");
+      $this->query("DELETE FROM {$this->npcs} WHERE owner_id = {$ownerId}");
+    }
+  }
+
   private function removePlanet(array $rift, int $ownerId, ?array $planet): void {
     $planetId = (int) $rift['planet_id'];
     if ($planet) {
@@ -194,13 +283,25 @@ class Storage {
         VALUES ('{$name}', {$ownerId}, 0, {$system}, {$position}, 1, '{$image}', {$now}, {$now},
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {$position}, 163, 0, 40)");
       $planetId = (int) $this->db->insert_id;
+      $profile = Profile::read($rift);
+      if ($profile) {
+        foreach ([200 => 'fleet', 400 => 'defence'] as $type => $group) {
+          foreach ($profile[$group] as $id => $count) {
+            $this->query("INSERT INTO {$this->units}
+              (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
+              VALUES ({$ownerId}, 1, {$planetId}, {$type}, " . (int) $id . ", " . (int) $count . ")");
+          }
+        }
+        $m = (int) $profile['resources'][901]; $c = (int) $profile['resources'][902]; $d = (int) $profile['resources'][903];
+        $this->query("UPDATE {$this->planets} SET metal = {$m}, crystal = {$c}, deuterium = {$d} WHERE id = {$planetId}");
+      }
       $this->query("UPDATE {$this->rifts} SET planet_id = {$planetId} WHERE rift_id = " . (int) $rift['rift_id']);
     } else {
       $planetId = (int) $planet['id'];
-      // Stage 2 has no resources/buildings. The clock also prevents ordinary
-      // basic income when native dispatch refreshes an event at ETA <= now.
+      // Never refill an existing garrison or its loot. Keep basic native income
+      // from accumulating before a dispatch refreshes a target at ETA <= now.
       $this->query("UPDATE {$this->planets} SET name = '{$name}', last_update = {$now}, que_processed = {$now},
-        metal = 0, crystal = 0, deuterium = 0, metal_perhour = 0, crystal_perhour = 0,
+        metal_perhour = 0, crystal_perhour = 0,
         deuterium_perhour = 0, energy_max = 0, energy_used = 0 WHERE id = {$planetId}");
     }
   }
@@ -243,13 +344,21 @@ class Storage {
         $this->db->commit();
         return;
       }
-      $ownerId = $this->lockNpc($state, $now);
+      $legacyOwnerId = $this->lockNpc($state, $now);
       $rows = $this->query("SELECT * FROM {$this->rifts} ORDER BY rift_id FOR UPDATE");
       $occupied = [];
+      $categoryCounts = [];
       $nextTransition = $now + $settings['tick_seconds'];
       while ($rift = $rows->fetch_assoc()) {
-        $planet = $this->lockPlanet($rift, $ownerId);
         $phase = Lifecycle::phase($rift, $now);
+        $profile = Profile::read($rift);
+        $ownerId = (int) ($rift['npc_owner_id'] ?? 0) ?: $legacyOwnerId;
+        if ($profile && in_array($phase, ['active', 'unstable'], true)) {
+          $ownerId = $this->lockRiftNpc($rift, $profile, $now);
+        } elseif (!empty($rift['npc_owner_id'])) {
+          $this->verifyRiftNpc($ownerId, (int) $rift['rift_id']);
+        }
+        $planet = $this->lockPlanet($rift, $ownerId);
         if ($phase === 'active' || $phase === 'unstable') {
           $this->materialize($rift, $ownerId, $now, $phase, $planet);
         } else {
@@ -260,17 +369,21 @@ class Storage {
           continue;
         }
         $occupied[(int) $rift['system']][(int) $rift['position']] = true;
+        if ($profile) {
+          $key = $profile['category']['key'];
+          $categoryCounts[$key] = ($categoryCounts[$key] ?? 0) + 1;
+        }
         $deadline = Lifecycle::nextTransition($rift, $now);
         if ($deadline > $now) {
           $nextTransition = min($nextTransition, $deadline);
         }
       }
+      $this->cleanupNpcs();
 
       $maxSystem = max(1, $maxSystem);
       $maxPlanet = max(1, $maxPlanet);
       $generationDue = (int) $state['next_generation_at'] <= $now;
       $expectedBirths = Lifecycle::expectedBirths($settings, $settings['generation_seconds']);
-      $snapshot = $this->db->real_escape_string(json_encode($settings, JSON_THROW_ON_ERROR));
       for ($system = 1; $system <= $maxSystem; $system++) {
         $initial = $system > (int) $state['seeded_systems'];
         if (!$initial && !$generationDue) {
@@ -281,7 +394,23 @@ class Storage {
         $count = $this->birthCount((float) $mean, count($free), $initial);
         shuffle($free);
         for ($i = 0; $i < $count; $i++) {
-          $rift = Lifecycle::create($now, $settings);
+          $birthSettings = $settings;
+          $snapshotData = $settings;
+          if (!empty($settings['categories'])) {
+            $categoryKey = Profile::choose($settings['categories'], $categoryCounts);
+            if ($categoryKey === null) { break; }
+            $category = $settings['categories'][$categoryKey];
+            $rates = [901 => (float) \SN::$config->rpg_exchange_metal,
+              902 => \SN::$config->rpg_exchange_crystal / \SN::$config->rpg_exchange_metal,
+              903 => \SN::$config->rpg_exchange_deuterium / \SN::$config->rpg_exchange_metal];
+            $profile = Profile::create($categoryKey, $category, $settings['fleet_limit_multiplier'], $rates);
+            $snapshotData = ['profile' => $profile, 'category_settings' => $category,
+              'fleet_limit_multiplier' => $settings['fleet_limit_multiplier']];
+            $birthSettings = array_replace($settings, Settings::categoryPhaseRanges($category));
+            $categoryCounts[$categoryKey] = ($categoryCounts[$categoryKey] ?? 0) + 1;
+          }
+          $snapshot = $this->db->real_escape_string(json_encode($snapshotData, JSON_THROW_ON_ERROR));
+          $rift = Lifecycle::create($now, $birthSettings);
           $image = $this->db->real_escape_string($rift['image']);
           $position = $free[$i];
           $this->query("INSERT INTO {$this->rifts}
@@ -316,9 +445,9 @@ class Storage {
   /** Read-only once installed; does not begin/commit the sender's transaction. */
   public function inSystem(int $system, int $now): array {
     $this->install();
-    $result = $this->query("SELECT r.*, s.npc_owner_id AS owner_id, p.id AS materialized_id
+    $result = $this->query("SELECT r.*, COALESCE(r.npc_owner_id, s.npc_owner_id) AS owner_id, p.id AS materialized_id
       FROM {$this->rifts} AS r JOIN {$this->state} AS s ON s.id = 1
-      LEFT JOIN {$this->planets} AS p ON p.id = r.planet_id AND p.id_owner = s.npc_owner_id
+      LEFT JOIN {$this->planets} AS p ON p.id = r.planet_id AND p.id_owner = COALESCE(r.npc_owner_id, s.npc_owner_id)
         AND p.galaxy = 0 AND p.system = r.system AND p.planet = r.position AND p.planet_type = 1
       WHERE r.system = {$system} AND r.born_at <= {$now} AND r.disappears_at > {$now} ORDER BY r.position");
     $rows = [];

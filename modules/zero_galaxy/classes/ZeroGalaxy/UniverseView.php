@@ -39,7 +39,10 @@ class UniverseView {
       }
       $canSpy = $isPlanet && !empty($owners[$ownerId]);
       $phaseLabel = (string) $lang['zero_galaxy_phase_' . $phase];
-      $name = sprintf($lang['zero_galaxy_rift_name'], $riftId) . ' — ' . $phaseLabel;
+      $profileMetadata = self::profileMetadata($rift);
+      $name = $profileMetadata
+        ? sprintf($lang['zero_galaxy_profile_rift_name'], $profileMetadata['category']['name'])
+        : sprintf($lang['zero_galaxy_rift_name'], $riftId) . ($phase === 'active' ? '' : ' — ' . $phaseLabel);
       $image = $phase === 'energy' ? 'object_in_space' : 'black_planet';
       if ($isPlanet) {
         $image = in_array($rift['image'], Lifecycle::IMAGES, true) ? $rift['image'] : Lifecycle::IMAGES[0];
@@ -56,13 +59,13 @@ class UniverseView {
         'USER_NAME_JS' => $canSpy ? js_safe_string($owners[$ownerId]['username']) : '',
         'USER_ATTACKABLE' => $canSpy,
       ];
-      $metadata[] = [
+      $metadata[] = array_merge([
         'id' => $riftId, 'position' => $position, 'phase' => $phase,
         'phaseLabel' => $phaseLabel, 'canSpy' => $canSpy,
         'imageUrl' => SN_ROOT_RELATIVE . $module->getRootRelative() . 'design/images/phases/' . $phase . '.png?v=' . rawurlencode($module->getVersion()),
         'nextAt' => Lifecycle::nextTransition($rift, $now),
         'nextLabel' => (string) $lang[$phase === 'closed' ? 'zero_galaxy_until_disappearance' : 'zero_galaxy_until_next_phase'],
-      ];
+      ], $profileMetadata);
     }
 
     for ($position = 1; $position <= $maxPlanet; $position++) {
@@ -91,6 +94,9 @@ class UniverseView {
         'badRequest' => (string) $lang['zero_galaxy_spy_bad_request'],
         'missing' => (string) $lang['zero_galaxy_spy_missing'],
         'failed' => (string) $lang['zero_galaxy_spy_failed'],
+        'category' => (string) $lang['zero_galaxy_category'],
+        'fleetLimit' => (string) $lang['zero_galaxy_fleet_limit'],
+        'points' => (string) $lang['zero_galaxy_points_short'],
         'time' => $lang['zero_galaxy_time'],
       ],
     ];
@@ -130,6 +136,29 @@ class UniverseView {
     }
 
     return $template;
+  }
+
+  private static function profileMetadata(array $rift): array {
+    $snapshot = json_decode((string) ($rift['config_snapshot'] ?? ''), true);
+    $profile = is_array($snapshot) ? ($snapshot['profile'] ?? null) : null;
+    if (!is_array($profile) || ($profile['version'] ?? null) !== 1) {
+      return [];
+    }
+
+    $category = $profile['category'] ?? null;
+    $fleetLimit = $profile['fleet_limit'] ?? null;
+    if (!is_array($category) || !is_string($category['name'] ?? null)
+      || trim($category['name']) === '' || !is_string($category['color'] ?? null)
+      || !preg_match('/^#[0-9a-fA-F]{6}$/D', $category['color'])
+      || !is_int($fleetLimit) || $fleetLimit < 0) {
+      return [];
+    }
+
+    return [
+      'category' => ['name' => $category['name'], 'color' => $category['color']],
+      // Keep all decimal digits when the configured limit exceeds JS safe integers.
+      'fleetLimit' => (string) $fleetLimit,
+    ];
   }
 
   private static function emptyPosition(int $position): array {
