@@ -75,3 +75,19 @@ dirinfo
 /xcache-admin/
 /xcache-admin2/
 
+# Local Docker environment
+/docker/
+/Dockerfile
+/Dockerfile.*
+/compose*.yaml
+/compose*.yml
+/docker-compose*.yaml
+/docker-compose*.yml
+/.dockerignore
+/docs/docker.md
+
+# Local documentation and reference modules
+/README.MD
+/modules/unit_captain/
+/modules/unit_capitan/
+
