@@ -116,7 +116,7 @@
         // Also override dimming from an older compiled module template.
         phaseObject.style.opacity = '1';
         phaseImage.setAttribute('src', rift.imageUrl);
-        phaseImage.setAttribute('alt', rift.phaseLabel);
+        phaseImage.setAttribute('alt', rift.name || rift.phaseLabel);
       }
       if (!rift.canSpy) {
         removeAll('[onclick*="doit"]', row);
@@ -135,7 +135,7 @@
         var details = document.createElement('div');
         details.className = 'zero-galaxy-next';
         details.style.cssText = 'display:block;margin-top:0.35em;font-size:0.9em;font-weight:normal;';
-        details.appendChild(document.createTextNode((hasCategory && rift.phase !== 'active' ? rift.phaseLabel + ' · ' : '') + rift.nextLabel + ': '));
+        details.appendChild(document.createTextNode(rift.nextLabel + ': '));
         var countdown = document.createElement('span');
         countdown.className = 'zero-galaxy-countdown';
         countdown.setAttribute('data-next-at', rift.nextAt);
@@ -163,7 +163,7 @@
           var image = content.querySelector('.uni_popup_planet img');
           if (image && rift.imageUrl) {
             image.setAttribute('src', rift.imageUrl);
-            image.setAttribute('alt', rift.phaseLabel);
+            image.setAttribute('alt', rift.name || rift.phaseLabel);
           }
           var popupProfile = profileDetails(rift);
           var popupTable = content.querySelector('table.planet_template');
@@ -172,6 +172,18 @@
             var profileCell = profileRow.insertCell(0);
             profileCell.colSpan = 2;
             profileCell.appendChild(popupProfile);
+          }
+          if (rift.canAttack && hasProfile(rift) && rift.attackUrl
+            && (rift.phase === 'active' || rift.phase === 'unstable')) {
+            var actions = content.querySelector('td[planet_planet][planet_type="1"]');
+            if (actions) {
+              var attack = document.createElement('a');
+              attack.className = 'zero-galaxy-attack button_pseudo';
+              attack.style.cssText = 'display:block;margin-bottom:0.35em;';
+              attack.href = rift.attackUrl;
+              attack.textContent = config.labels.attack;
+              actions.insertBefore(attack, actions.firstChild);
+            }
           }
           popup.html = content.innerHTML;
         }

@@ -19,11 +19,13 @@ $allow_anonymous = true;
 require getcwd() . '/common.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Settings.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
 
 use ZeroGalaxy\Lifecycle;
 use ZeroGalaxy\Profile;
+use ZeroGalaxy\RiftName;
 use ZeroGalaxy\Settings;
 use ZeroGalaxy\Storage;
 
@@ -126,6 +128,8 @@ try {
     $owners[$id] = $owner; $planetIds[$id] = $planetId;
     $profile = Profile::read($rift); $planet = $one("SELECT * FROM {$prefix}planets WHERE id = {$planetId}");
     $check($owner > 0 && $planetId > 0 && (int) $planet['id_owner'] === $owner, 'Opening must create an individually owned native planet.');
+    $check($planet['name'] === RiftName::forRift($rift, 'active'),
+      'The physical active planet must use its saved category name for new native reports.');
     if ($id === $collisionRiftId) {
       $npcName = $one("SELECT username FROM {$prefix}users WHERE id = {$owner}")['username'];
       $check($owner !== $collisionHumanId && $npcName !== $collisionName
@@ -188,8 +192,9 @@ try {
   $storage->tick($now + 5, $future, 4, 1, true);
   $check((int) $storage->findActive((int) $saved[$firstId]['system'], 1, $now + 5)['planet_id'] === $firstPlanet,
     'The unstable transition must preserve the same physical garrison planet.');
-  $check($one("SELECT name FROM {$prefix}planets WHERE id = {$firstPlanet}")['name'] === Storage::UNSTABLE_NAME,
-    'Instability must update the display phase while keeping the depleted army.');
+  $check($one("SELECT name FROM {$prefix}planets WHERE id = {$firstPlanet}")['name']
+    === RiftName::forRift($saved[$firstId], 'unstable'),
+    'Instability must update the category-qualified physical planet name while keeping the depleted army.');
 
   $db->query("INSERT INTO {$prefix}users (username, password, galaxy) VALUES ('Unrelated population-test pilot', '!disabled!', 1)");
   $human = (int) $db->insert_id;

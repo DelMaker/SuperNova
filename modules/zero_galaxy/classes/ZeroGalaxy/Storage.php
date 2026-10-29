@@ -265,7 +265,7 @@ class Storage {
   }
 
   private function materialize(array $rift, int $ownerId, int $now, string $phase, ?array $planet): void {
-    $name = $this->db->real_escape_string($phase === 'unstable' ? self::UNSTABLE_NAME : self::ACTIVE_NAME);
+    $name = $this->db->real_escape_string(RiftName::forRift($rift, $phase));
     if (!$planet) {
       $system = (int) $rift['system'];
       $position = (int) $rift['position'];
@@ -467,5 +467,13 @@ class Storage {
     $row = $rows[$position] ?? null;
     return $row && !empty($row['planet_id']) && in_array(Lifecycle::phase($row, $now), ['active', 'unstable'], true)
       ? $row : null;
+  }
+
+  public function findById(int $id, int $now): ?array {
+    $this->install();
+    $coordinates = $this->query("SELECT system, position FROM {$this->rifts} WHERE rift_id = {$id}")->fetch_assoc();
+    if (!$coordinates) { return null; }
+    $row = $this->inSystem((int) $coordinates['system'], $now)[(int) $coordinates['position']] ?? null;
+    return $row && (int) $row['rift_id'] === $id ? $row : null;
   }
 }

@@ -8,6 +8,7 @@ if (PHP_SAPI !== 'cli') {
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
 
 use ZeroGalaxy\Lifecycle;
 use ZeroGalaxy\Storage;

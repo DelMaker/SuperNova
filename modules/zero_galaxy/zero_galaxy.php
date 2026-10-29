@@ -8,6 +8,9 @@ use ZeroGalaxy\NPCStatistics;
 use ZeroGalaxy\SpySender;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
+use ZeroGalaxy\AttackView;
+use ZeroGalaxy\AttackLink;
+use ZeroGalaxy\AttackPolicy;
 
 class zero_galaxy extends sn_module {
   public $versionCommitted = '';
@@ -18,10 +21,12 @@ class zero_galaxy extends sn_module {
   public function __construct($filename = __FILE__) {
     $this->manifest['package'] = 'universe';
     $this->manifest['name'] = 'zero_galaxy';
-    $this->manifest['version'] = '0.3.0';
+    $this->manifest['version'] = '0.4.3';
     $this->manifest['mvc']['model'][''] = ['callable' => 'route'];
     $this->manifest['mvc']['view']['zero_galaxy'] = ['callable' => 'render'];
     $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
+    $this->manifest['mvc']['view']['zero_galaxy_attack'] = ['callable' => 'attack'];
+    $this->manifest['mvc']['view'][''] = ['callable' => 'decorateAttack'];
     $this->manifest['menu']['menu_zero_galaxy'] = [
       'LEVEL' => 'submenu',
       'TYPE' => 'lang',
@@ -37,6 +42,8 @@ class zero_galaxy extends sn_module {
 
   public function initialize() {
     global $sn_mvc;
+
+    require_once __DIR__ . '/captain_compat.php';
 
     // The base module expects an entry for every registered MVC handler type.
     $this->manifest['mvc'] += array_fill_keys(array_keys($sn_mvc), []);
@@ -69,6 +76,7 @@ class zero_galaxy extends sn_module {
     return [
       'sn_mvc[pages][zero_galaxy]' => ['filename' => '', 'options' => []],
       'sn_mvc[pages][zero_galaxy_spy]' => ['filename' => '', 'options' => []],
+      'sn_mvc[pages][zero_galaxy_attack]' => ['filename' => '', 'options' => []],
     ];
   }
 
@@ -76,7 +84,24 @@ class zero_galaxy extends sn_module {
     if (!SN::$sys_user_logged_in) {
       return $template;
     }
-    $this->updateWorld(INITIAL_PAGE === 'zero_galaxy_spy');
+    $attackCoordinates = AttackLink::nativeCoordinates(INITIAL_PAGE, $_SERVER['REQUEST_METHOD'] ?? '', $_GET,
+      max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet));
+    $this->updateWorld($attackCoordinates !== null || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack'], true));
+
+    if ($attackCoordinates !== null) {
+      // Old spy reports contain coordinates, not a rift generation. Resolve
+      // the current target; the wizard then validates its own profile and cap.
+      $rift = null;
+      try {
+        if (!$this->worldError && $this->storage) {
+          $rift = $this->storage->findActive($attackCoordinates['system'], $attackCoordinates['position'], SN_TIME_NOW);
+        }
+      } catch (Throwable $error) {
+        error_log('Zero Galaxy attack link: ' . $error->getMessage());
+      }
+      $riftId = $rift && AttackPolicy::limit($rift) !== null ? (int) $rift['rift_id'] : 0;
+      sys_redirect(SN_ROOT_VIRTUAL . 'index.php?page=zero_galaxy_attack&rift_id=' . $riftId);
+    }
 
     $galaxy = $_POST['galaxy'] ?? $_GET['galaxy'] ?? null;
     if (INITIAL_PAGE === 'galaxy' && is_scalar($galaxy)
@@ -149,5 +174,26 @@ class zero_galaxy extends sn_module {
     }
 
     die(SpySender::send($this->storage, $this->settings));
+  }
+
+  public function attack($template = null) {
+    if ($this->worldError || !$this->storage) {
+      SnTemplate::messageBox(SN::$lang['zero_galaxy_unavailable'], SN::$lang['zero_galaxy_title']);
+    }
+    AttackView::render($this, $this->storage, $this->settings);
+    return $template;
+  }
+
+  public function decorateAttack($template = null) {
+    if (INITIAL_PAGE !== 'zero_galaxy_attack' || !is_object($template)
+      || !isset($template->_rootref['ZERO_ATTACK_STEP']) || !empty($template->_rootref['ZERO_ATTACK_WRAPPED'])
+      || !array_intersect(array_keys($template->files), ['fleet0', 'fleet1', 'fleet2', 'fleet3'])) {
+      return $template;
+    }
+    $step = (int) $template->_rootref['ZERO_ATTACK_STEP'];
+    $template->_rootref['ZERO_ATTACK_WRAPPED'] = true;
+    // Replace the native root handle; the wrapper includes that native file.
+    $template->files = $template->filename = $template->files_inherit = [];
+    return $this->addModuleTemplate('zero_galaxy_attack_' . $step, $template);
   }
 }

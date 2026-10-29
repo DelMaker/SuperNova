@@ -26,12 +26,15 @@ require_once $root . 'classes/Fleet/MissionEspionage.php';
 require_once $root . 'classes/Fleet/FleetDispatchEvent.php';
 require_once $root . 'classes/Planet/DBStaticPlanet.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftEspionage.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftSpyEvent.php';
 
 use Fleet\FleetDispatchEvent;
 use Fleet\MissionEspionageReport;
 use ZeroGalaxy\RiftEspionage;
+use ZeroGalaxy\RiftName;
 use ZeroGalaxy\RiftSpyEvent;
 
 // Only the unit-storage and owner lookups are fixtures. The native report,
@@ -201,6 +204,28 @@ foreach ([
       && (int) $report->spiedUnits[TECH_ARMOR] === 26, 'Revealed combat technologies must retain their real values');
   }
 }
+
+// A scan captures the current native planet name. Renaming that planet later
+// must affect new scans without rewriting already serialized message payloads.
+$namedMission = new SpyFixtureMission(10, 20, 36, 0, 40);
+$namedRift = ['config_snapshot' => json_encode(['profile' => ['version' => 1,
+  'category' => ['key' => 'tiny', 'name' => 'Крошечный']]], JSON_UNESCAPED_UNICODE)];
+$namedMission->dstPlanetRow['name'] = RiftName::forRift($namedRift, 'active');
+$activeReport = $namedMission->run();
+$historicalJson = json_encode($activeReport, JSON_UNESCAPED_UNICODE);
+$check($activeReport->targetPlanetName === 'Крошечный разлом', 'A native report constructor must capture the size-qualified current planet name.');
+$check($namedMission->scanned === ['fleet', 'defense', 'structures', 'tech'], 'Naming must not skip the actual native scan-group pipeline.');
+$namedMission->scanned = [];
+$namedMission->dstPlanetRow['name'] = RiftName::forRift($namedRift, 'unstable');
+$unstableReport = $namedMission->run();
+$check($unstableReport->targetPlanetName === 'Крошечный нестабильный разлом', 'A new scan must capture the renamed unstable planet.');
+$check(MissionEspionageReport::fromJson(json_encode($unstableReport, JSON_UNESCAPED_UNICODE))->targetPlanetName
+  === 'Крошечный нестабильный разлом', 'The unstable name must survive native report serialization.');
+$check(MissionEspionageReport::fromJson($historicalJson)->targetPlanetName === 'Крошечный разлом'
+  && $activeReport->targetPlanetName === 'Крошечный разлом', 'Historical scan messages and the original report must retain their captured name.');
+$check($unstableReport->targetPlanetId === $activeReport->targetPlanetId
+  && $unstableReport->targetPlanetGalaxy === 0 && (int) $unstableReport->spiedUnits[SHIP_SMALL_FIGHTER_LIGHT] === 40,
+  'A phase-name change must preserve the native target identity and scanned garrison.');
 
 // Wrapping preserves all native public event state and the stored MT_SPY value.
 $eventReflection = new ReflectionClass(FleetDispatchEvent::class);

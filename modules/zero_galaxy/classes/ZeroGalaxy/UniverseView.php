@@ -40,9 +40,13 @@ class UniverseView {
       $canSpy = $isPlanet && !empty($owners[$ownerId]);
       $phaseLabel = (string) $lang['zero_galaxy_phase_' . $phase];
       $profileMetadata = self::profileMetadata($rift);
-      $name = $profileMetadata
-        ? sprintf($lang['zero_galaxy_profile_rift_name'], $profileMetadata['category']['name'])
-        : sprintf($lang['zero_galaxy_rift_name'], $riftId) . ($phase === 'active' ? '' : ' — ' . $phaseLabel);
+      if ($profileMetadata) {
+        $name = RiftName::forRift($rift, $phase, (string) ($lang['zero_galaxy_time']['locale'] ?? 'ru'));
+      } elseif ($phase === 'energy' || $phase === 'closed') {
+        $name = $phaseLabel;
+      } else {
+        $name = sprintf($lang['zero_galaxy_rift_name'], $riftId) . ($phase === 'active' ? '' : ' — ' . $phaseLabel);
+      }
       $image = $phase === 'energy' ? 'object_in_space' : 'black_planet';
       if ($isPlanet) {
         $image = in_array($rift['image'], Lifecycle::IMAGES, true) ? $rift['image'] : Lifecycle::IMAGES[0];
@@ -60,8 +64,11 @@ class UniverseView {
         'USER_ATTACKABLE' => $canSpy,
       ];
       $metadata[] = array_merge([
-        'id' => $riftId, 'position' => $position, 'phase' => $phase,
+        'id' => $riftId, 'position' => $position, 'phase' => $phase, 'name' => $name,
         'phaseLabel' => $phaseLabel, 'canSpy' => $canSpy,
+        'canAttack' => $canSpy && !empty($profileMetadata),
+        'attackUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_attack&rift_id=' . $riftId
+          . '&system=' . $system . '&planet=' . $position,
         'imageUrl' => SN_ROOT_RELATIVE . $module->getRootRelative() . 'design/images/phases/' . $phase . '.png?v=' . rawurlencode($module->getVersion()),
         'nextAt' => Lifecycle::nextTransition($rift, $now),
         'nextLabel' => (string) $lang[$phase === 'closed' ? 'zero_galaxy_until_disappearance' : 'zero_galaxy_until_next_phase'],
@@ -97,6 +104,7 @@ class UniverseView {
         'category' => (string) $lang['zero_galaxy_category'],
         'fleetLimit' => (string) $lang['zero_galaxy_fleet_limit'],
         'points' => (string) $lang['zero_galaxy_points_short'],
+        'attack' => (string) $lang['zero_galaxy_attack'],
         'time' => $lang['zero_galaxy_time'],
       ],
     ];
