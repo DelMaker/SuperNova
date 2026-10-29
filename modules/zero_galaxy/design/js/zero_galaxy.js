@@ -39,10 +39,15 @@
       }
     }
 
-    // Keep the native popup layout and spy control, removing other mission controls.
+    // Keep native reconnaissance and debris collection controls.
     var planetTemplate = container.querySelector('#planet_template');
     if (planetTemplate) {
       removeAll('[go], .ownmissile, .ownharvest', planetTemplate);
+    }
+    var harvestControls = container.querySelectorAll('#debris_template .ownharvest');
+    for (var harvest = 0; harvest < harvestControls.length; harvest++) {
+      // Override the blanket rule in an older compiled module template too.
+      harvestControls[harvest].style.setProperty('display', 'block', 'important');
     }
     removeAll('[go="galaxy"][mode="name"], [href*="mode=name"]');
     var expedition = container.querySelector('.ownexpedition');
@@ -213,18 +218,22 @@
     document.addEventListener('click', function (event) {
       var node = event.target;
       var hasControl = false;
+      var hasHarvest = false;
+      var debrisPopup = false;
       var belongsHere = false;
       while (node && node !== document) {
         if (node.nodeType === 1) {
           hasControl = hasControl || node.hasAttribute('go')
-            || node.classList.contains('ownmissile') || node.classList.contains('ownharvest');
+            || node.classList.contains('ownmissile');
+          hasHarvest = hasHarvest || node.classList.contains('ownharvest');
+          debrisPopup = debrisPopup || node.classList.contains('debris_template');
           belongsHere = belongsHere || node === container || node.classList.contains('planet_template')
             || node.classList.contains('user_template') || node.classList.contains('ally_template')
             || node.classList.contains('debris_template');
         }
         node = node.parentNode;
       }
-      if (belongsHere && hasControl) {
+      if (belongsHere && (hasControl || (hasHarvest && !debrisPopup))) {
         event.preventDefault();
         event.stopPropagation();
       }
@@ -249,35 +258,47 @@
         return typeof nativeDoit === 'function' ? nativeDoit.apply(this, arguments) : false;
       }
       var rift = rifts[Number(position)];
-      if (Number(missionId) !== Number(config.spyMission) || Number(planetType) !== Number(config.planetType)) {
-        notify(config.labels.badRequest, true);
+      var recycle = Number(missionId) === Number(config.recycleMission);
+      var validMission = recycle ? Number(planetType) === Number(config.debrisType)
+        : Number(missionId) === Number(config.spyMission) && Number(planetType) === Number(config.planetType);
+      if (!validMission) {
+        notify(recycle ? config.labels.recycleBadRequest : config.labels.badRequest, true);
         return false;
       }
-      if (!rift || !rift.canSpy) {
-        notify(config.labels.missing, true);
+      if (!rift || !(recycle ? rift.canRecycle : rift.canSpy)) {
+        notify(recycle ? config.labels.recycleMissing : config.labels.missing, true);
         return false;
       }
       if (sending) {
         return false;
       }
       sending = true;
-      window.jQuery.post(config.spyUrl, {
+      var request = {
         galaxy: 0, system: Number(window.uni_system), planet: Number(position),
-        planet_type: Number(config.planetType), mission: Number(config.spyMission),
-        shipcount: Math.max(1, Math.floor(Number(shipcount) || Number(config.spyCount))), rift_id: rift.id
-      }, function (response) {
+        planet_type: Number(recycle ? config.debrisType : config.planetType),
+        mission: Number(recycle ? config.recycleMission : config.spyMission), rift_id: rift.id
+      };
+      if (!recycle) {
+        request.shipcount = Math.max(1, Math.floor(Number(shipcount) || Number(config.spyCount)));
+      }
+      window.jQuery.post(recycle ? config.recycleUrl : config.spyUrl, request, function (response) {
         var parts = String(response).split('|');
-        var success = parts.length > 1;
+        var counterName = recycle ? 'flt_recyclers' : 'flt_spies';
+        var counter = parts.length > 1 && parts[1].match(new RegExp('^' + counterName + '=(\\d+)$'));
+        var success = !!counter;
         if (success) {
-          var spies = parts[1].match(/^flt_spies=(\d+)$/);
-          var spiesElement = document.getElementById('flt_spies');
-          if (spies && spiesElement) {
-            spiesElement.textContent = spies[1];
+          var counterElement = document.getElementById(counterName);
+          if (counterElement) {
+            counterElement.textContent = counter[1];
+          }
+          if (recycle) {
+            // Incoming capacity changed. Refresh after the native success popup.
+            reloadAt = Math.min(reloadAt, now() + 2);
           }
         }
         notify(parts[0], !success);
       }, 'text').fail(function () {
-        notify(config.labels.failed, true);
+        notify(recycle ? config.labels.recycleFailed : config.labels.failed, true);
       }).always(function () {
         sending = false;
       });

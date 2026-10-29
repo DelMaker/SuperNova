@@ -6,11 +6,13 @@ use ZeroGalaxy\Profile;
 use ZeroGalaxy\RiftFleetDispatcher;
 use ZeroGalaxy\NPCStatistics;
 use ZeroGalaxy\SpySender;
+use ZeroGalaxy\RecycleSender;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
 use ZeroGalaxy\AttackView;
 use ZeroGalaxy\AttackLink;
 use ZeroGalaxy\AttackPolicy;
+use ZeroGalaxy\AdminView;
 
 class zero_galaxy extends sn_module {
   public $versionCommitted = '';
@@ -21,12 +23,13 @@ class zero_galaxy extends sn_module {
   public function __construct($filename = __FILE__) {
     $this->manifest['package'] = 'universe';
     $this->manifest['name'] = 'zero_galaxy';
-    $this->manifest['version'] = '0.4.4';
+    $this->manifest['version'] = '0.5.0';
     $this->manifest['mvc']['model'][''] = ['callable' => 'route'];
     $this->manifest['mvc']['view']['zero_galaxy'] = ['callable' => 'render'];
     $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
+    $this->manifest['mvc']['view']['zero_galaxy_recycle'] = ['callable' => 'sendRecyclers'];
     $this->manifest['mvc']['view']['zero_galaxy_attack'] = ['callable' => 'attack'];
-    $this->manifest['mvc']['view'][''] = ['callable' => 'decorateAttack'];
+    $this->manifest['mvc']['view'][''] = ['callable' => 'decorateView'];
     $this->manifest['menu']['menu_zero_galaxy'] = [
       'LEVEL' => 'submenu',
       'TYPE' => 'lang',
@@ -78,6 +81,7 @@ class zero_galaxy extends sn_module {
     return [
       'sn_mvc[pages][zero_galaxy]' => ['filename' => '', 'options' => []],
       'sn_mvc[pages][zero_galaxy_spy]' => ['filename' => '', 'options' => []],
+      'sn_mvc[pages][zero_galaxy_recycle]' => ['filename' => '', 'options' => []],
       'sn_mvc[pages][zero_galaxy_attack]' => ['filename' => '', 'options' => []],
     ];
   }
@@ -88,7 +92,8 @@ class zero_galaxy extends sn_module {
     }
     $attackCoordinates = AttackLink::nativeCoordinates(INITIAL_PAGE, $_SERVER['REQUEST_METHOD'] ?? '', $_GET,
       max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet));
-    $this->updateWorld($attackCoordinates !== null || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack'], true));
+    $this->updateWorld($attackCoordinates !== null
+      || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack', 'zero_galaxy_recycle'], true));
 
     if ($attackCoordinates !== null) {
       // Old spy reports contain coordinates, not a rift generation. Resolve
@@ -202,6 +207,31 @@ class zero_galaxy extends sn_module {
     }
     AttackView::render($this, $this->storage, $this->settings);
     return $template;
+  }
+
+  public function sendRecyclers($template = null) {
+    if (!defined('IN_AJAX')) {
+      define('IN_AJAX', true);
+    }
+    setHeader('Content-Type: text/plain; charset=utf-8');
+    if (!$this->worldReady()) {
+      http_response_code(503);
+      die(SN::$lang['zero_galaxy_unavailable']);
+    }
+
+    die(RecycleSender::send($this->storage, $this->settings));
+  }
+
+  public function decorateView($template = null) {
+    if (AdminView::appliesTo($template)) {
+      try {
+        AdminView::filter($template, SN::$db->link, SN::$db->db_prefix);
+      } catch (Throwable $error) {
+        // A display filter must not make the native administration unavailable.
+        error_log('Zero Galaxy admin list: ' . $error->getMessage());
+      }
+    }
+    return $this->decorateAttack($template);
   }
 
   public function decorateAttack($template = null) {

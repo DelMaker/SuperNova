@@ -461,7 +461,8 @@ class Storage {
   /** Read-only once installed; does not begin/commit the sender's transaction. */
   public function inSystem(int $system, int $now): array {
     $this->install();
-    $result = $this->query("SELECT r.*, COALESCE(r.npc_owner_id, s.npc_owner_id) AS owner_id, p.id AS materialized_id
+    $result = $this->query("SELECT r.*, COALESCE(r.npc_owner_id, s.npc_owner_id) AS owner_id, p.id AS materialized_id,
+        p.debris_metal, p.debris_crystal
       FROM {$this->rifts} AS r JOIN {$this->state} AS s ON s.id = 1
       LEFT JOIN {$this->planets} AS p ON p.id = r.planet_id AND p.id_owner = COALESCE(r.npc_owner_id, s.npc_owner_id)
         AND p.galaxy = 0 AND p.system = r.system AND p.planet = r.position AND p.planet_type = 1

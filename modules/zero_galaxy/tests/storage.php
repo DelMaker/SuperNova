@@ -182,8 +182,8 @@ try {
 
   $db->query("INSERT INTO {$prefix}users (username, password, galaxy) VALUES ('Untouched human', 'unusable-test-password', 1)");
   $humanId = (int) $db->insert_id;
-  $db->query("INSERT INTO {$prefix}planets (name, id_owner, galaxy, system, planet, metal)
-    VALUES ('Untouched planet', {$humanId}, 1, 1, 1, 1234)");
+  $db->query("INSERT INTO {$prefix}planets (name, id_owner, galaxy, system, planet, metal, debris_metal, debris_crystal)
+    VALUES ('Untouched planet', {$humanId}, 1, 1, 1, 1234, 900, 500)");
   $humanPlanetId = (int) $db->insert_id;
   $humanBefore = $one("SELECT * FROM {$prefix}users WHERE id = {$humanId}");
   $humanPlanetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$humanPlanetId}");
@@ -195,21 +195,49 @@ try {
     VALUES ({$humanId}, 6, {$humanPlanetId}, {$planetId}, 0, 1, 1, 0, " . ($now + 100) . ", " . ($now + 200) . ")");
   $fleetId = (int) $db->insert_id;
   $fleetBefore = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$fleetId}");
+  $db->query("UPDATE {$prefix}planets SET debris_metal = 21000, debris_crystal = 13000 WHERE id = {$planetId}");
+  $activeDebris = $storage->inSystem(1, $now + 4)[1];
+  $check((int) $activeDebris['debris_metal'] === 21000 && (int) $activeDebris['debris_crystal'] === 13000,
+    'The overview must read current native debris rather than the initial garrison snapshot');
+  $recycleBefore = [];
+  foreach ([0, 1] as $returning) {
+    $db->query("INSERT INTO {$prefix}fleets
+      (fleet_owner, fleet_mission, fleet_start_planet_id, fleet_end_planet_id, fleet_end_type,
+       fleet_end_galaxy, fleet_end_system, fleet_end_planet, fleet_mess, fleet_start_time, fleet_end_time,
+       fleet_resource_metal, fleet_resource_crystal)
+      VALUES ({$humanId}, 8, {$humanPlanetId}, {$planetId}, 2, 0, 1, 1, {$returning},
+        " . ($now + 100) . ', ' . ($now + 200) . ', ' . ($returning * 700) . ', ' . ($returning * 300) . ')');
+    $id = (int) $db->insert_id;
+    $recycleBefore[$id] = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$id}");
+  }
 
   $storage->tick($now + 5, $zero, 1, 1, true);
   $check($one("SELECT name FROM {$prefix}planets WHERE id = {$planetId}")['name'] === Storage::UNSTABLE_NAME, 'Unstable boundary must rename the existing target');
   $check((int) $storage->findActive(1, 1, $now + 5)['planet_id'] === $planetId, 'Instability must preserve the physical planet ID');
+  $storage->tick($now + 8, $zero, 1, 1, true);
+  $unstableDebris = $storage->inSystem(1, $now + 8)[1];
+  $check((int) $unstableDebris['debris_metal'] === 21000 && (int) $unstableDebris['debris_crystal'] === 13000,
+    'Debris must survive the unstable phase until the exact closing boundary');
   $storage->tick($now + 9, $zero, 1, 1, true);
   $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}planets WHERE id = {$planetId}") === 0, 'Closed phase must delete the physical planet');
   $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_player_id = {$npcId}") === 0, 'Closing must clean the NPC planet units');
   $check((int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_player_id = {$humanId}") === 7, 'Closing must retain unrelated human units');
   $closed = $storage->inSystem(1, $now + 9)[1];
   $check($closed['planet_id'] === null && Lifecycle::phase($closed, $now + 9) === 'closed', 'Closed trace must outlive its planet');
+  $check($closed['debris_metal'] === null && $closed['debris_crystal'] === null,
+    'A closed trace must not expose the vanished planet debris');
+  $check((int) $scalar("SELECT SUM(debris_metal + debris_crystal) FROM {$prefix}planets") === 1400,
+    'Closing must remove all rift debris and preserve debris at unrelated coordinates');
   $check($storage->findActive(1, 1, $now + 9) === null, 'Closed trace must not be a mission target');
   $fleetAfter = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$fleetId}");
   $check($fleetAfter['fleet_end_planet_id'] === null, 'Native FK must clear only the vanished target link');
   $fleetBefore['fleet_end_planet_id'] = null;
   $check($fleetBefore === $fleetAfter, 'Incoming fleet, mission state and flight times must survive closure');
+  foreach ($recycleBefore as $id => $before) {
+    $before['fleet_end_planet_id'] = null;
+    $check($one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$id}") === $before,
+      'Closing must preserve inbound recyclers and returning recyclers with already collected cargo');
+  }
   $check($one("SELECT * FROM {$prefix}users WHERE id = {$humanId}") === $humanBefore, 'Human user must remain untouched');
   $check($one("SELECT * FROM {$prefix}planets WHERE id = {$humanPlanetId}") === $humanPlanetBefore, 'Human planet must remain untouched');
 

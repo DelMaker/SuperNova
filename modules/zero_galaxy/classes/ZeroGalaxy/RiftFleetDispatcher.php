@@ -43,6 +43,8 @@ class RiftFleetDispatcher extends FleetDispatcher {
         if ($metadataAvailable) {
           $events[$index] = new RiftSpyEvent($event, $legacyOwnerId);
         }
+      } elseif ($event->missionId === MT_RECYCLE && $event->event === EVENT_FLT_ARRIVE) {
+        $events[$index] = new RiftRecycleEvent($event, $legacyOwnerId, $metadataAvailable);
       } else {
         $events[$index] = new RiftAttackEvent($event, $legacyOwnerId, $metadataAvailable);
       }

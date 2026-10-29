@@ -35,8 +35,11 @@ $a_lang_array = [
     'weeks' => ['one' => 'week', 'other' => 'weeks'],
   ],
   'zero_galaxy_unavailable' => 'Rift information is temporarily unavailable. Please try again later.',
-  'zero_galaxy_native_hint' => 'Observe rift phases and send probes to active and unstable rifts. Rifts with a known category can be attacked within their fleet limit.',
+  'zero_galaxy_native_hint' => 'Scout rifts and attack within their fleet limit. Recyclers can collect debris until the rift closes.',
   'zero_galaxy_spy_bad_request' => 'Probes can only be sent to active and unstable rifts.',
   'zero_galaxy_spy_missing' => 'This rift is no longer available for espionage. Refresh the universe view.',
   'zero_galaxy_spy_failed' => 'Unable to send probes. Please try again.',
+  'zero_galaxy_recycle_bad_request' => 'Recyclers can only be sent to debris at active and unstable rifts.',
+  'zero_galaxy_recycle_missing' => 'This debris is no longer available for collection. Refresh the universe view.',
+  'zero_galaxy_recycle_failed' => 'Unable to send recyclers. Please try again.',
 ];

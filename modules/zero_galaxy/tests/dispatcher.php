@@ -39,6 +39,7 @@ namespace ZeroGalaxy {
     public static function render(...$arguments) { self::$calls++; }
   }
   class SpySender { public static function send(...$arguments) { return 'UNSAFE_SPY_SENT'; } }
+  class RecycleSender { public static function send(...$arguments) { return 'UNSAFE_RECYCLERS_SENT'; } }
 }
 
 namespace {
@@ -121,7 +122,7 @@ namespace {
     $check(false, $message);
   };
 
-  if (($argv[1] ?? '') === '--spy-endpoint') {
+  if (in_array($argv[1] ?? '', ['--spy-endpoint', '--recycle-endpoint'], true)) {
     $module = $fixture(new CustomDispatcher());
     // Populate the world fields deliberately: an unsupported dispatcher must
     // still block the endpoint even if lifecycle state is already available.
@@ -131,8 +132,9 @@ namespace {
       $property->setAccessible(true);
       $property->setValue($module, $value);
     }
-    $module->sendSpy();
-    throw new \RuntimeException('The unsupported spy endpoint must stop before its sender');
+    if ($argv[1] === '--recycle-endpoint') { $module->sendRecyclers(); }
+    else { $module->sendSpy(); }
+    throw new \RuntimeException('The unsupported mission endpoint must stop before its sender');
   }
   if (($argv[1] ?? '') === '--worker-initialize') {
     $module = $fixture(new \Fleet\FleetDispatcher());
@@ -174,16 +176,18 @@ namespace {
   $module->attack();
   $check(\ZeroGalaxy\AttackView::$calls === 1, 'The supported attack page must remain available');
 
-  $process = proc_open([PHP_BINARY, __FILE__, '--spy-endpoint'],
-    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-  if (!is_resource($process)) { throw new \RuntimeException('Could not start endpoint refusal check'); }
-  fclose($pipes[0]);
-  $output = stream_get_contents($pipes[1]);
-  $errors = stream_get_contents($pipes[2]);
-  fclose($pipes[1]);
-  fclose($pipes[2]);
-  $check(proc_close($process) === 0 && $output === 'MODULE_UNAVAILABLE' && $errors === '',
-    'The real spy endpoint must terminate with module unavailability before its sender runs');
+  foreach (['--spy-endpoint', '--recycle-endpoint'] as $endpoint) {
+    $process = proc_open([PHP_BINARY, __FILE__, $endpoint],
+      [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    if (!is_resource($process)) { throw new \RuntimeException('Could not start endpoint refusal check'); }
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1]);
+    $errors = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $check(proc_close($process) === 0 && $output === 'MODULE_UNAVAILABLE' && $errors === '',
+      'The real mission endpoint must stop before its sender runs: ' . $endpoint);
+  }
   $process = proc_open([PHP_BINARY, __FILE__, '--worker-initialize'],
     [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
   if (!is_resource($process)) { throw new \RuntimeException('Could not start worker initialization check'); }

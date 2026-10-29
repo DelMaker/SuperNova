@@ -11,9 +11,18 @@ class UniverseView {
     lng_include('universe');
     lng_include('stat');
     lng_include('fleet');
+    require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
 
     $system = max(1, min(max(1, (int) SN::$config->game_maxSystem), $system));
     $maxPlanet = max(1, (int) SN::$config->game_maxPlanet);
+    $recyclers = $recyclerInfo = [];
+    foreach (sn_get_groups('flt_recyclers') as $id) {
+      $recyclerInfo[$id] = get_ship_data($id, $user);
+      if ($owned = max(0, (int) mrc_get_level($user, $planetrow, $id, false, true))) {
+        $recyclers[$id] = $owned;
+      }
+    }
+    $incomingCapacity = null;
     $template = $module->addModuleTemplate('zero_galaxy_native', $template);
     foreach (['galaxyrow', 'users', 'alliances', 'fleets', 'defense_active'] as $block) {
       $template->destroy_block_vars($block);
@@ -38,6 +47,13 @@ class UniverseView {
         $owners[$ownerId] = db_user_by_id($ownerId);
       }
       $canSpy = $isPlanet && !empty($owners[$ownerId]);
+      $debris = [];
+      if ($canSpy && ($rift['debris_metal'] ?? 0) + ($rift['debris_crystal'] ?? 0) > 0) {
+        if ($incomingCapacity === null) {
+          $incomingCapacity = self::incomingCapacity($system, (int) $user['id'], $recyclerInfo);
+        }
+        $debris = self::debris($rift, $recyclers, $incomingCapacity[$position] ?? 0, $planetrow);
+      }
       $phaseLabel = (string) $lang['zero_galaxy_phase_' . $phase];
       $profileMetadata = self::profileMetadata($rift);
       if ($profileMetadata) {
@@ -53,7 +69,7 @@ class UniverseView {
         $planetCount++;
       }
 
-      $byPosition[$position] = [
+      $byPosition[$position] = array_merge([
         'PLANET_ID' => $isPlanet ? $planetId : 'rift_' . $riftId,
         'PLANET_NAME' => htmlspecialchars($name, ENT_QUOTES, 'UTF-8'),
         'PLANET_NAME_JS' => js_safe_string($name),
@@ -62,11 +78,12 @@ class UniverseView {
         'USER_NAME' => $canSpy ? htmlspecialchars($owners[$ownerId]['username'], ENT_QUOTES, 'UTF-8') : '',
         'USER_NAME_JS' => $canSpy ? js_safe_string($owners[$ownerId]['username']) : '',
         'USER_ATTACKABLE' => $canSpy,
-      ];
+      ], $debris);
       $metadata[] = array_merge([
         'id' => $riftId, 'position' => $position, 'phase' => $phase, 'name' => $name,
         'phaseLabel' => $phaseLabel, 'canSpy' => $canSpy,
         'canAttack' => $canSpy && !empty($profileMetadata),
+        'canRecycle' => !empty($debris['DEBRIS_WILL_GATHER']),
         'attackUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_attack&rift_id=' . $riftId
           . '&system=' . $system . '&planet=' . $position,
         'imageUrl' => SN_ROOT_RELATIVE . $module->getRootRelative() . 'design/images/phases/' . $phase . '.png?v=' . rawurlencode($module->getVersion()),
@@ -97,10 +114,15 @@ class UniverseView {
       'rifts' => $metadata,
       'spyUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_spy',
       'spyMission' => MT_SPY, 'planetType' => PT_PLANET, 'spyCount' => $spyCount,
+      'recycleUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_recycle',
+      'recycleMission' => MT_RECYCLE, 'debrisType' => PT_DEBRIS,
       'labels' => [
         'badRequest' => (string) $lang['zero_galaxy_spy_bad_request'],
         'missing' => (string) $lang['zero_galaxy_spy_missing'],
         'failed' => (string) $lang['zero_galaxy_spy_failed'],
+        'recycleBadRequest' => (string) $lang['zero_galaxy_recycle_bad_request'],
+        'recycleMissing' => (string) $lang['zero_galaxy_recycle_missing'],
+        'recycleFailed' => (string) $lang['zero_galaxy_recycle_failed'],
         'category' => (string) $lang['zero_galaxy_category'],
         'fleetLimit' => (string) $lang['zero_galaxy_fleet_limit'],
         'points' => (string) $lang['zero_galaxy_points_short'],
@@ -124,7 +146,8 @@ class UniverseView {
       'ACT_SPIO' => $spyCount, 'ACT_SPY' => 1,
       'ACT_WRITE' => 0, 'ACT_STATISTICS' => 0, 'ACT_INFO' => 0, 'ACT_FRIEND' => 0,
       'ACT_MISSILE' => 0, 'MIPs' => 0, 'deathStars' => 0, 'PLANET_PHALANX' => 0,
-      'PLANET_RECYCLERS' => 0, 'PLANET_RECYCLERS_TEXT' => '0',
+      'PLANET_RECYCLERS' => array_sum($recyclers),
+      'PLANET_RECYCLERS_TEXT' => \HelperString::numberFloorAndFormat(array_sum($recyclers)),
       'opt_uni_tooltip_time' => 500, 'opt_uni_avatar_user' => 0, 'opt_uni_avatar_ally' => 0,
       'SHOW_ADMIN' => 0, 'COL_SPAN' => 8, 'COL_SPAN_PLUS' => 2,
       'COL_SPAN_NEW' => 3, 'COL_SPAN_NEW_COLONIZE' => 1,
@@ -144,6 +167,42 @@ class UniverseView {
     }
 
     return $template;
+  }
+
+  private static function incomingCapacity(int $system, int $userId, array $recyclerInfo): array {
+    $capacity = [];
+    foreach (\Fleet\DbFleetStatic::fleet_list_by_planet_coords(0, $system, 0, PT_DEBRIS) as $fleet) {
+      if ((int) $fleet['fleet_owner'] !== $userId || (int) $fleet['fleet_mission'] !== MT_RECYCLE
+        || (int) $fleet['fleet_mess'] !== FLEET_STATUS_FLYING || (int) $fleet['fleet_end_galaxy'] !== 0
+        || (int) $fleet['fleet_end_system'] !== $system || (int) $fleet['fleet_end_type'] !== PT_DEBRIS) {
+        continue;
+      }
+      $position = (int) $fleet['fleet_end_planet'];
+      foreach (sys_unit_str2arr($fleet['fleet_array']) as $id => $count) {
+        $capacity[$position] = ($capacity[$position] ?? 0) + $count * ($recyclerInfo[$id][P_CAPACITY] ?? 0);
+      }
+    }
+    return $capacity;
+  }
+
+  /** Use native source-fleet/fuel estimates with the module's fixed distance. */
+  private static function debris(array $rift, array $recyclers, $reserved, array $source): array {
+    $total = $rift['debris_metal'] + $rift['debris_crystal'];
+    $available = max(0, $total - $reserved);
+    $source['galaxy'] = 1;
+    $target = ['galaxy' => 0, 'system' => (int) $rift['system'], 'planet' => (int) $rift['position']];
+    $transport = flt_calculate_fleet_to_transport($recyclers, $available, $source, $target);
+    $gather = max(0, min($transport['capacity'], $available));
+    $reservedPercent = min(100, floor($reserved / $total * 100));
+    return [
+      'DEBRIS' => $total,
+      'DEBRIS_METAL' => $rift['debris_metal'], 'DEBRIS_CRYSTAL' => $rift['debris_crystal'],
+      'DEBRIS_RESERVED' => $reserved, 'DEBRIS_RESERVED_PERCENT' => $reservedPercent,
+      'DEBRIS_WILL_GATHER' => $gather,
+      'DEBRIS_WILL_GATHER_PERCENT' => $available ? floor($gather / $available * (100 - $reservedPercent)) : 0,
+      'DEBRIS_GATHER_TOTAL' => $gather + $reserved,
+      'DEBRIS_GATHER_TOTAL_PERCENT' => min(100, floor(($gather + $reserved) / $total * 100)),
+    ];
   }
 
   private static function profileMetadata(array $rift): array {
