@@ -35,6 +35,8 @@ namespace {
   require_once $root . 'classes/Planet/DBStaticPlanet.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
+  require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftTarget.php';
+  require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftMissionEvent.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AttackPolicy.php';

@@ -17,7 +17,7 @@ $_GET = $_POST = $_COOKIE = $_REQUEST = [];
 define('IN_AJAX', true);
 $allow_anonymous = true;
 require getcwd() . '/common.php';
-foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'AttackPolicy', 'AttackSender'] as $class) {
+foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'NativeDispatch', 'AttackSender', 'SpySender'] as $class) {
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';
 }
 require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
@@ -29,6 +29,7 @@ use ZeroGalaxy\AttackPolicy;
 use ZeroGalaxy\AttackSender;
 use ZeroGalaxy\Profile;
 use ZeroGalaxy\Settings;
+use ZeroGalaxy\SpySender;
 use ZeroGalaxy\Storage;
 
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
@@ -37,6 +38,8 @@ $originalPrefix = SN::$db->db_prefix;
 $originalLoggedIn = SN::$sys_user_logged_in;
 $originalUser = $user;
 $originalPlanet = $planetrow;
+$originalUserOptions = SN::$user_options;
+$originalDb = SN::$db;
 $prefix = 'zg_send_' . bin2hex(random_bytes(5)) . '_';
 $tables = ['zero_galaxy_npcs', 'zero_galaxy_rifts', 'zero_galaxy_state', 'captain', 'bashing', 'fleets', 'unit', 'planets', 'users'];
 $assertions = 0;
@@ -56,6 +59,27 @@ $expect = function (callable $callable, string $class, string $message, string $
   }
   $check(false, $message);
 };
+
+// Fail only the display refresh after native COMMIT; all transactional writes
+// still go through the real DBAL and connection, with no production test hook.
+class DispatchRefreshFailure {
+  private $db;
+  private $sourceId;
+  public $failures = 0;
+
+  public function __construct($db, int $sourceId) { $this->db = $db; $this->sourceId = $sourceId; }
+  public function __get($name) { return $this->db->$name; }
+  public function __call($name, $arguments) { return $this->db->$name(...$arguments); }
+  public function doquery($query, $fetch = false, $skip = false) {
+    if (!$this->failures && !db_mysql::$db_in_transaction
+      && strpos($query, 'SELECT * FROM {{planets}}') === 0
+      && strpos($query, '`id` = ' . $this->sourceId) !== false) {
+      $this->failures++;
+      throw new RuntimeException('Injected committed source refresh failure');
+    }
+    return $this->db->doquery($query, $fetch, $skip);
+  }
+}
 
 try {
   if (!preg_match('/^[a-zA-Z0-9_]*$/D', $originalPrefix)) { throw new RuntimeException('Invalid source prefix'); }
@@ -208,6 +232,133 @@ try {
   }
   $db->query("DROP TRIGGER {$prefix}reject_unit");
 
+  // Exercise the AJAX sender itself, not only its arrival/report adapter.
+  $_SERVER['REQUEST_METHOD'] = 'POST';
+  $_SERVER['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest';
+  $spySend = function (array $fields = [], bool $useDefault = false) use ($storage, $settings, $riftId) {
+    $_POST = array_replace(['galaxy' => '0', 'system' => '1', 'planet' => '1', 'planet_type' => '1',
+      'mission' => (string) MT_SPY, 'rift_id' => (string) $riftId, 'shipcount' => '3'], $fields);
+    if ($useDefault) { unset($_POST['shipcount']); }
+    return SpySender::send($storage, $settings);
+  };
+  $spyRejected = function (array $fields, string $message, string $expected = null)
+    use ($spySend, $refresh, $state, $scalar, $check) {
+    $refresh(); $before = $state();
+    $response = $spySend($fields);
+    $check(is_string($response) && strpos($response, '|flt_spies=') === false
+      && ($expected === null || $response === $expected), $message . ': expected an AJAX error response');
+    $check($state() === $before, $message . ': no fleet, fuel, ships or unrelated rows may change');
+    $check(!db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0,
+      $message . ': the sender must close only its own transaction');
+  };
+  foreach ([['galaxy' => '1'], ['mission' => (string) MT_ATTACK], ['planet_type' => '3'],
+    ['system' => '0'], ['planet' => '0'], ['rift_id' => (string) ($riftId + 999)],
+    ['shipcount' => '0'], ['shipcount' => '1.5'], ['shipcount' => ['3']]] as $fields) {
+    $spyRejected($fields, 'Invalid reconnaissance request');
+  }
+  $_SERVER['REQUEST_METHOD'] = 'GET';
+  $spyRejected([], 'Reconnaissance requires POST');
+  $_SERVER['REQUEST_METHOD'] = 'POST';
+  unset($_SERVER['HTTP_X_REQUESTED_WITH']);
+  $spyRejected([], 'Reconnaissance requires the same-origin AJAX header');
+  $_SERVER['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest';
+  $refresh(); $before = $state(); SN::$sys_user_logged_in = false;
+  $response = $spySend();
+  $check(strpos($response, '|flt_spies=') === false && $state() === $before,
+    'An unauthenticated reconnaissance request must not change any fixture row.');
+  $refresh();
+  db_mysql::db_transaction_start();
+  $response = $spySend();
+  $check(strpos($response, '|flt_spies=') === false && $state() === $before,
+    'Reconnaissance inside a caller transaction must be rejected without writing.');
+  $check(db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 1,
+    'A rejected nested reconnaissance must leave the caller transaction intact.');
+  db_mysql::db_transaction_rollback();
+  $db->query("UPDATE {$prefix}planets SET deuterium = 0 WHERE id = {$sourceId}");
+  $spyRejected([], 'Reconnaissance without fuel');
+  $db->query("UPDATE {$prefix}planets SET deuterium = 1000000000 WHERE id = {$sourceId}");
+  $db->query("UPDATE {$prefix}planets SET id_owner = {$otherId} WHERE id = {$targetId}");
+  $spyRejected([], 'Reconnaissance against changed target ownership');
+  $db->query("UPDATE {$prefix}planets SET id_owner = {$npcId} WHERE id = {$targetId}");
+  foreach (['authlevel' => 1, 'user_bot' => 0, 'parent_account_id' => 12345, 'parent_account_global' => 12345] as $field => $value) {
+    $db->query("UPDATE {$prefix}users SET {$field} = {$value} WHERE id = {$npcId}");
+    $spyRejected([], 'Reconnaissance with an invalid NPC marker: ' . $field);
+    $original = $field === 'user_bot' ? Storage::NPC_BOT_TYPE : 0;
+    $db->query("UPDATE {$prefix}users SET {$field} = {$original} WHERE id = {$npcId}");
+  }
+  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET opens_at = " . (SN_TIME_NOW + 1) . " WHERE rift_id = {$riftId}");
+  $spyRejected([], 'Reconnaissance before the target opens');
+  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET opens_at = {$opens} WHERE rift_id = {$riftId}");
+
+  $probeUnit = (int) $scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_location_type = 1
+    AND unit_location_id = {$sourceId} AND unit_snid = " . SHIP_SPY);
+  $db->query("UPDATE {$prefix}unit SET unit_level = 0 WHERE unit_id = {$probeUnit}");
+  $spyRejected([], 'Reconnaissance without probes');
+  $db->query("UPDATE {$prefix}unit SET unit_level = 50 WHERE unit_id = {$probeUnit}");
+  $db->query("CREATE TRIGGER {$prefix}reject_unit BEFORE UPDATE ON {$prefix}unit FOR EACH ROW
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Spy sender rollback test'");
+  ob_start();
+  try { $spyRejected([], 'Reconnaissance SQL failure after fleet insert and fuel debit'); }
+  finally { restore_error_handler(); ob_end_clean(); }
+  $db->query("DROP TRIGGER {$prefix}reject_unit");
+
+  SN::$user_options = [PLAYER_OPTION_FLEET_SPY_DEFAULT => 4];
+  $refresh();
+  $spySourceBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $spyTargetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}");
+  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $response = $spySend([], true);
+  SN::$user_options = $originalUserOptions;
+  $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $check(strpos($response, '|flt_spies=46') !== false
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
+    'The native default probe count must create exactly one AJAX reconnaissance fleet.');
+  $check((int) $spyFleet['fleet_mission'] === MT_SPY
+    && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 4]
+    && (int) $spyFleet['fleet_start_planet_id'] === $sourceId
+    && (int) $spyFleet['fleet_end_planet_id'] === $targetId
+    && (int) $spyFleet['fleet_target_owner'] === $npcId,
+    'Reconnaissance must use the native mission, exact probes and real source/target identities.');
+  $spyTravel = flt_travel_data($user, $spySourceBefore, $spyTargetBefore, [SHIP_SPY => 4], 10, [], Universe::getBaseGalaxyDistance());
+  $check((int) $spyFleet['fleet_start_time'] === SN_TIME_NOW + (int) $spyTravel['duration']
+    && (int) $spyFleet['fleet_end_time'] === SN_TIME_NOW + 2 * (int) $spyTravel['duration']
+    && (int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+      === (int) $spySourceBefore['deuterium'] - (int) $spyTravel['consumption'],
+    'Reconnaissance must use the one-galaxy distance and debit its native fuel exactly once.');
+  $check($one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}") === $spyTargetBefore,
+    'Launching reconnaissance must leave the target resources and garrison unchanged.');
+  $refresh();
+  $response = $spySend(['shipcount' => '999']);
+  $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $check(strpos($response, '|flt_spies=0') !== false
+    && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 46]
+    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$probeUnit}") === 0,
+    'Requested probes must clamp to the owned count and report the correct remaining amount.');
+  $db->query("UPDATE {$prefix}unit SET unit_level = 50 WHERE unit_id = {$probeUnit}");
+  $refresh();
+  $sourceBeforeFailure = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $fault = new DispatchRefreshFailure($originalDb, $sourceId);
+  SN::$db = $fault;
+  try { $response = $spySend(['shipcount' => '7']); }
+  finally { SN::$db = $originalDb; }
+  $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $check($fault->failures === 1 && strpos($response, '|flt_spies=43') !== false,
+    'A post-COMMIT read failure must still report reconnaissance success and the locked remaining probes.');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1
+    && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 7]
+    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$probeUnit}") === 43,
+    'A committed reconnaissance must create one fleet and subtract its probes exactly once despite display failure.');
+  $spyTravel = flt_travel_data($user, $sourceBeforeFailure, $spyTargetBefore, [SHIP_SPY => 7], 10, [], Universe::getBaseGalaxyDistance());
+  $check((int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+      === (int) $sourceBeforeFailure['deuterium'] - (int) $spyTravel['consumption']
+    && (int) $planetrow['deuterium'] === (int) $sourceBeforeFailure['deuterium'] - (int) $spyTravel['consumption']
+    && !db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0,
+    'The successful reconnaissance fallback must expose the exact committed fuel debit and leave no transaction open.');
+  $_POST = [];
+  $_SERVER['REQUEST_METHOD'] = 'GET';
+  unset($_SERVER['HTTP_X_REQUESTED_WITH']);
+
   $captainModule = moduleCaptain();
   $check(is_object($captainModule), 'This integration environment must load the native captain module.');
   $db->query("INSERT INTO {$prefix}unit (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
@@ -261,17 +412,37 @@ try {
     'Sending from a signed source must not change the player selected-planet preference.');
   $rejected(function () use ($send, $captainId, $sourceId) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, $captainId, $sourceId); },
     'A captain already flying cannot be attached to another fleet');
+  $refresh();
+  $sourceBeforeFailure = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $shipsBeforeFailure = (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}");
+  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $fault = new DispatchRefreshFailure($originalDb, $sourceId);
+  SN::$db = $fault;
+  try { $committed = $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId); }
+  finally { SN::$db = $originalDb; }
+  $check($fault->failures === 1 && $committed['fleet_id'] > 0,
+    'A post-COMMIT read failure must return the already-created attacking fleet as a success.');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1
+    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === $shipsBeforeFailure - 1,
+    'An attack display failure must not trigger a second fleet or another ship deduction.');
+  $check((int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+      === (int) $sourceBeforeFailure['deuterium'] - (int) $committed['travel']['consumption']
+    && (int) $planetrow['deuterium'] === (int) $sourceBeforeFailure['deuterium'] - (int) $committed['travel']['consumption']
+    && !db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0,
+    'The attack fallback must retain the single committed fuel debit and leave the transaction closed.');
   $check($one("SELECT * FROM {$prefix}users WHERE id = {$otherId}") === $foreignBefore
     && $one("SELECT * FROM {$prefix}planets WHERE id = {$foreignId}") === $foreignPlanetBefore,
     'Rejected and successful sends must preserve unrelated human users and planets.');
-  echo "Attack sender: {$assertions} assertions passed; native helpers used and isolated tables cleaned.\n";
+  echo "Attack and spy senders: {$assertions} assertions passed; native helpers used and isolated tables cleaned.\n";
 } finally {
+  SN::$db = $originalDb;
   if (db_mysql::$db_in_transaction) { db_mysql::db_transaction_rollback(); }
   elseif ((int) $scalar('SELECT @@in_transaction') !== 0) { $db->rollback(); }
   SN::$db->db_prefix = $originalPrefix;
   SN::$db->schema()->clear();
   DBStaticUnit::cache_clear();
   SN::$sys_user_logged_in = $originalLoggedIn;
+  SN::$user_options = $originalUserOptions;
   $user = $originalUser; $planetrow = $originalPlanet;
   $db->query('SET FOREIGN_KEY_CHECKS = 0');
   foreach ($tables as $table) { $db->query("DROP TABLE IF EXISTS {$prefix}{$table}"); }

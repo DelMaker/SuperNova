@@ -21,7 +21,7 @@ class zero_galaxy extends sn_module {
   public function __construct($filename = __FILE__) {
     $this->manifest['package'] = 'universe';
     $this->manifest['name'] = 'zero_galaxy';
-    $this->manifest['version'] = '0.4.3';
+    $this->manifest['version'] = '0.4.4';
     $this->manifest['mvc']['model'][''] = ['callable' => 'route'];
     $this->manifest['mvc']['view']['zero_galaxy'] = ['callable' => 'render'];
     $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
@@ -52,7 +52,7 @@ class zero_galaxy extends sn_module {
     try {
       SN::$gc->extend('fleetDispatcher', function ($dispatcher, $gc) {
         if (get_class($dispatcher) !== \Fleet\FleetDispatcher::class) {
-          error_log('Zero Galaxy: custom fleet dispatcher retained; information concealment adapter not installed');
+          error_log('Zero Galaxy: custom fleet dispatcher retained; module arrival adapter not installed');
           return $dispatcher;
         }
 
@@ -68,7 +68,9 @@ class zero_galaxy extends sn_module {
     // Reconcile NPC deadlines before the native dispatcher looks up its targets.
     if (INITIAL_PAGE === 'worker' && sys_get_param_str('mode') === 'dispatchFleets'
       && SN::$gc->request->url->isSigned()) {
-      $this->updateWorld(true);
+      // Other modules have not finished initialization yet. Reconcile deadlines
+      // here, but resolve the dispatcher only on later routes/views.
+      $this->updateWorld(true, false);
     }
   }
 
@@ -118,8 +120,26 @@ class zero_galaxy extends sn_module {
     return $template;
   }
 
-  private function updateWorld($force = false) {
+  private function requireDispatcher(): void {
+    if (!(SN::$gc->fleetDispatcher instanceof RiftFleetDispatcher)) {
+      throw new RuntimeException('Zero Galaxy requires its fleet arrival adapter; module actions are unavailable');
+    }
+  }
+
+  private function worldReady(): bool {
     try {
+      $this->requireDispatcher();
+    } catch (Throwable $error) {
+      $this->worldError = $error;
+    }
+    return !$this->worldError && $this->storage !== null;
+  }
+
+  private function updateWorld($force = false, $checkDispatcher = true) {
+    try {
+      if ($checkDispatcher) {
+        $this->requireDispatcher();
+      }
       if (!$this->storage) {
         try {
           $this->settings = Settings::load($this->config);
@@ -149,7 +169,7 @@ class zero_galaxy extends sn_module {
   }
 
   public function render($template = null) {
-    if ($this->worldError || !$this->storage) {
+    if (!$this->worldReady()) {
       SnTemplate::messageBox(SN::$lang['zero_galaxy_unavailable'], SN::$lang['zero_galaxy_title']);
     }
 
@@ -168,7 +188,7 @@ class zero_galaxy extends sn_module {
       define('IN_AJAX', true);
     }
     setHeader('Content-Type: text/plain; charset=utf-8');
-    if ($this->worldError || !$this->storage) {
+    if (!$this->worldReady()) {
       http_response_code(503);
       die(SN::$lang['zero_galaxy_unavailable']);
     }
@@ -177,7 +197,7 @@ class zero_galaxy extends sn_module {
   }
 
   public function attack($template = null) {
-    if ($this->worldError || !$this->storage) {
+    if (!$this->worldReady()) {
       SnTemplate::messageBox(SN::$lang['zero_galaxy_unavailable'], SN::$lang['zero_galaxy_title']);
     }
     AttackView::render($this, $this->storage, $this->settings);
@@ -190,6 +210,7 @@ class zero_galaxy extends sn_module {
       || !array_intersect(array_keys($template->files), ['fleet0', 'fleet1', 'fleet2', 'fleet3'])) {
       return $template;
     }
+    AttackView::escapeFleetNames($template);
     $step = (int) $template->_rootref['ZERO_ATTACK_STEP'];
     $template->_rootref['ZERO_ATTACK_WRAPPED'] = true;
     // Replace the native root handle; the wrapper includes that native file.

@@ -58,6 +58,22 @@ class Storage {
       return;
     }
     $this->outsideTransaction();
+    try {
+      // A new Storage object is created on every request. Check the installed
+      // schema and singleton with a read before attempting any DDL or writes.
+      $installed = $this->query("SELECT s.id, s.npc_owner_id, s.stats_hidden_ids,
+          r.planet_id, r.npc_owner_id, n.owner_id, n.rift_id
+        FROM {$this->state} s LEFT JOIN {$this->rifts} r ON 0 LEFT JOIN {$this->npcs} n ON 0
+        WHERE s.id = 1 LIMIT 1");
+      if ($installed->num_rows) {
+        $this->ready = true;
+        return;
+      }
+    } catch (Throwable $error) {
+      // Only absent tables or upgrade columns require installation. A broken
+      // connection or denied read must remain a real error, not a DDL retry.
+      if (!in_array((int) $error->getCode(), [1054, 1146], true)) { throw $error; }
+    }
     $this->query("CREATE TABLE IF NOT EXISTS {$this->rifts} (
       rift_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       system INT UNSIGNED NOT NULL,

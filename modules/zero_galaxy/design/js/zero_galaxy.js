@@ -156,10 +156,28 @@
         if (!rift || !rift.canSpy) {
           return null;
         }
-        var popup = nativePlanetPopup.call(this, that);
+        // Native replacements interpret dollar sequences and later template tokens.
+        // Generate the shell with an empty name, then insert the literal title as text.
+        var nativeRow = window.uni_row && window.uni_row[position];
+        var nativeName = nativeRow && nativeRow.planet_name;
+        var popup;
+        try {
+          if (nativeRow) {
+            nativeRow.planet_name = '';
+          }
+          popup = nativePlanetPopup.call(this, that);
+        } finally {
+          if (nativeRow) {
+            nativeRow.planet_name = nativeName;
+          }
+        }
         if (popup && popup.html) {
           var content = document.createElement('div');
           content.innerHTML = popup.html;
+          var heading = content.querySelector('table.planet_template th');
+          if (heading) {
+            heading.textContent = heading.textContent.trim() + ' ' + (rift.name || nativeName || '');
+          }
           var image = content.querySelector('.uni_popup_planet img');
           if (image && rift.imageUrl) {
             image.setAttribute('src', rift.imageUrl);

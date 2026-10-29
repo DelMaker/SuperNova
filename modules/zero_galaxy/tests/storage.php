@@ -120,6 +120,22 @@ try {
   $check(array_key_exists('planet_id', $migrated) && $migrated['planet_id'] === null, 'Migration must add an empty planet link');
   $check($storage->npcOwnerId() === 0, 'Schema installation must not impersonate an existing user');
 
+  $writeCommands = function () use ($db): array {
+    return $db->query("SHOW SESSION STATUS WHERE Variable_name IN
+      ('Com_create_table','Com_alter_table','Com_insert','Com_update','Com_delete','Com_replace')")->fetch_all(MYSQLI_ASSOC);
+  };
+  $commandsBefore = $writeCommands();
+  (new Storage($db, $prefix))->install();
+  $check($writeCommands() === $commandsBefore,
+    'A fresh request against an installed schema must not issue DDL or data writes');
+  $db->query("DELETE FROM {$prefix}zero_galaxy_state WHERE id=1");
+  (new Storage($db, $prefix))->install();
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_state WHERE id=1") === 1,
+    'Existing tables without the singleton must still recover through installation');
+  $check($one("SELECT * FROM {$prefix}zero_galaxy_rifts") === $migrated,
+    'Recovering the singleton must preserve the existing rift');
+  $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at=" . ($now + 100) . ",seeded_systems=1 WHERE id=1");
+
   $storage->tick($now, $settings, 1, 1);
   $npcId = $storage->npcOwnerId();
   $check($npcId > 0, 'First tick must create an NPC');

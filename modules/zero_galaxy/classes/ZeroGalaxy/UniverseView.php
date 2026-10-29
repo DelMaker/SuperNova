@@ -147,9 +147,8 @@ class UniverseView {
   }
 
   private static function profileMetadata(array $rift): array {
-    $snapshot = json_decode((string) ($rift['config_snapshot'] ?? ''), true);
-    $profile = is_array($snapshot) ? ($snapshot['profile'] ?? null) : null;
-    if (!is_array($profile) || ($profile['version'] ?? null) !== 1) {
+    $profile = Profile::read($rift);
+    if (!$profile) {
       return [];
     }
 

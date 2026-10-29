@@ -147,7 +147,7 @@ class AttackView {
     $profile = Profile::read($rift);
     $limit = (string) AttackPolicy::limit($rift) . ($scale === 1 ? '' : '000000');
     return ['step' => $step, 'riftId' => (int) $rift['rift_id'], 'limit' => $limit,
-      'unitCosts' => $prices, 'costScale' => (string) $scale, 'fixedFleet' => $ships,
+      'unitCosts' => $prices, 'costScale' => (string) $scale, 'fixedFleet' => array_map('strval', $ships),
       'distance' => \Universe::getBaseGalaxyDistance(),
       'nextUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_attack&step=' . ($step + 1),
       'fields' => ['rift_id' => (int) $rift['rift_id'], 'source_id' => $sourceId, 'token_at' => $issuedAt,
@@ -158,6 +158,17 @@ class AttackView {
         'remaining' => $lang['zero_galaxy_attack_remaining'], 'over' => $lang['zero_galaxy_attack_over'],
         'points' => $lang['zero_galaxy_points_short'], 'attackTitle' => $lang['zero_galaxy_attack_title'],
         'missing' => $lang['zero_galaxy_attack_missing']]];
+  }
+
+  /** Escape once at the module display hook; payloads and planet records keep their raw names. */
+  public static function escapeFleetNames($template): void {
+    foreach ($template->_tpldata['fleets'] ?? [] as $index => $fleet) {
+      foreach (['START_NAME', 'END_NAME'] as $field) {
+        if (isset($fleet[$field])) {
+          $template->_tpldata['fleets'][$index][$field] = htmlspecialchars((string) $fleet[$field], ENT_QUOTES, 'UTF-8');
+        }
+      }
+    }
   }
 
   private static function sent(array $result, array $target): void {

@@ -39,13 +39,14 @@ class AttackPolicy {
   }
 
   public static function ships($input): array {
-    if (!is_array($input) || count($input) > count(sn_get_groups('fleet'))) {
+    $fleetIds = sn_get_groups('fleet');
+    if (!is_array($input) || count($input) > count($fleetIds)) {
       throw new InvalidArgumentException('Invalid fleet composition');
     }
     $result = [];
     foreach ($input as $id => $count) {
       if ((!is_int($id) && (!is_string($id) || !preg_match('/^[1-9][0-9]*$/D', $id)))
-        || !in_array((int) $id, sn_get_groups('fleet'), true) || !is_scalar($count) || is_bool($count)
+        || !in_array((int) $id, $fleetIds, true) || !is_scalar($count) || is_bool($count)
         || !preg_match('/^[0-9]+$/D', (string) $count)
         || (float) $count >= PHP_INT_MAX) {
         throw new InvalidArgumentException('Invalid fleet composition');

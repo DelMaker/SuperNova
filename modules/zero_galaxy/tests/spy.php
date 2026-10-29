@@ -26,6 +26,9 @@ require_once $root . 'classes/Fleet/MissionEspionage.php';
 require_once $root . 'classes/Fleet/FleetDispatchEvent.php';
 require_once $root . 'classes/Planet/DBStaticPlanet.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftTarget.php';
+require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftMissionEvent.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftEspionage.php';
@@ -258,34 +261,48 @@ if (getenv('SUPERNOVA_DB_HOST')) {
   $legacy->setValue($ownershipEvent, 2);
   $moduleLocked = $reflection->getProperty('moduleRecordsLocked');
   $moduleLocked->setAccessible(true);
+  $lockedRift = $reflection->getProperty('lockedRift');
+  $lockedRift->setAccessible(true);
+  $ownershipCheck = function () use ($db, $table, $lockedRift, $ownershipEvent, $owned): bool {
+    $lockedRift->setValue($ownershipEvent, $db->query("SELECT * FROM {$table} LIMIT 1")->fetch_assoc());
+    return $owned->invoke($ownershipEvent);
+  };
   $planet = ['id' => 20, 'id_owner' => 2, 'galaxy' => 0, 'system' => 3, 'planet' => 5, 'planet_type' => PT_PLANET];
   $ownershipEvent->dstPlanetRow = $planet;
   try {
     $db->query("CREATE TABLE {$table} (rift_id INT PRIMARY KEY, planet_id INT, npc_owner_id INT NULL,
-      system INT, position INT, opens_at BIGINT, closes_at BIGINT) ENGINE=InnoDB");
-    $db->query("INSERT INTO {$table} VALUES (1, 20, 2, 3, 5, " . (SN_TIME_NOW - 1) . ', ' . (SN_TIME_NOW + 1) . ')');
-    $check(!$owned->invoke($ownershipEvent), 'The modifier must not read membership without acquiring module locks first');
+      system INT, position INT, born_at BIGINT, opens_at BIGINT, unstable_at BIGINT,
+      closes_at BIGINT, disappears_at BIGINT) ENGINE=InnoDB");
+    $timeline = (SN_TIME_NOW - 100) . ',' . (SN_TIME_NOW - 1) . ',' . SN_TIME_NOW . ',' . (SN_TIME_NOW + 1) . ',' . (SN_TIME_NOW + 100);
+    $db->query("INSERT INTO {$table} VALUES (1, 20, 2, 3, 5, {$timeline})");
+    $check(!$ownershipCheck(), 'The modifier must not read membership without acquiring module locks first');
     $moduleLocked->setValue($ownershipEvent, true);
-    $check($owned->invoke($ownershipEvent), 'A live independently owned NPC rift must receive half concealment');
+    $check($ownershipCheck(), 'A live independently owned NPC rift must receive half concealment');
+    $nativeDb = SN::$db;
+    SN::$db = (object) ['link' => new class {
+      public function query($sql) { throw new RuntimeException('Ownership must use its already locked snapshot'); }
+    }];
+    try { $check($owned->invoke($ownershipEvent), 'Ownership checks must not issue another SQL query after taking locks'); }
+    finally { SN::$db = $nativeDb; }
     $db->query("UPDATE {$table} SET npc_owner_id = NULL");
-    $check($owned->invoke($ownershipEvent), 'Legacy shared-owner rifts must retain module ownership');
+    $check($ownershipCheck(), 'Legacy shared-owner rifts must retain module ownership');
     $legacy->setValue($ownershipEvent, 9);
-    $check(!$owned->invoke($ownershipEvent), 'Legacy null ownership must not match an unrelated NPC');
+    $check(!$ownershipCheck(), 'Legacy null ownership must not match an unrelated NPC');
     $db->query("UPDATE {$table} SET npc_owner_id = 9");
-    $check(!$owned->invoke($ownershipEvent), 'Another NPC owner must not receive the module modifier');
+    $check(!$ownershipCheck(), 'Another NPC owner must not receive the module modifier');
     $db->query("UPDATE {$table} SET npc_owner_id = 2, closes_at = " . SN_TIME_NOW);
-    $check(!$owned->invoke($ownershipEvent), 'Closed targets must fall back to native handling');
+    $check(!$ownershipCheck(), 'Closed targets must fall back to native handling');
     $db->query("UPDATE {$table} SET closes_at = " . (SN_TIME_NOW + 1));
     $ownershipEvent->dstPlanetRow['galaxy'] = 1;
-    $check(!$owned->invoke($ownershipEvent), 'Ordinary galaxies must remain native');
+    $check(!$ownershipCheck(), 'Ordinary galaxies must remain native');
     $ownershipEvent->dstPlanetRow = $planet;
     $fixtureOwners[2]['user_bot'] = 0;
-    $check(!$owned->invoke($ownershipEvent), 'A human owner must never receive the module modifier');
+    $check(!$ownershipCheck(), 'A human owner must never receive the module modifier');
     $fixtureOwners[2]['user_bot'] = 200;
     $db->query("DELETE FROM {$table}");
-    $check(!$owned->invoke($ownershipEvent), 'A foreign planet at zero coordinates must remain native');
+    $check(!$ownershipCheck(), 'A foreign planet at zero coordinates must remain native');
     $ownershipEvent->dstPlanetRow = null;
-    $check(!$owned->invoke($ownershipEvent), 'A missing target must retain native probe-return handling');
+    $check(!$ownershipCheck(), 'A missing target must retain native probe-return handling');
 
     $db->query("CREATE TABLE {$prefix}zero_galaxy_state (id INT PRIMARY KEY) ENGINE=InnoDB");
     $db->query("INSERT INTO {$prefix}zero_galaxy_state VALUES (1)");
@@ -296,7 +313,7 @@ if (getenv('SUPERNOVA_DB_HOST')) {
     $db->query("INSERT INTO {$prefix}planets VALUES (10,1,1,2,3,1),(20,3,0,3,5,1)");
     $db->query("CREATE TABLE {$prefix}fleets (fleet_id INT PRIMARY KEY) ENGINE=InnoDB");
     $db->query("INSERT INTO {$prefix}fleets VALUES (77)");
-    $db->query("INSERT INTO {$table} VALUES (1,20,3,3,5," . (SN_TIME_NOW - 1) . ',' . (SN_TIME_NOW + 1) . ')');
+    $db->query("INSERT INTO {$table} VALUES (1,20,3,3,5,{$timeline})");
     SN::$gc = (object) ['db' => new SpyFixtureLocks($db, $prefix)];
     $event = $eventReflection->newInstanceWithoutConstructor();
     $event->fleet = ['fleet_id' => 77, 'fleet_mission' => MT_SPY, 'fleet_end_galaxy' => 0,
@@ -307,6 +324,19 @@ if (getenv('SUPERNOVA_DB_HOST')) {
     $event->userIdsToLock = [1,3];
     $event->planetIdsToLock = [10,20];
     $event->fleetIdsToLock = [77];
+
+    $nativeDb = SN::$db;
+    SN::$db = (object) ['db_prefix' => $prefix, 'link' => new class {
+      public $error = 'Synthetic transaction deadlock';
+      public $errno = 1213;
+      public function query($sql) { return false; }
+    }];
+    try {
+      (new RiftSpyEvent($event, 2))->lockEventRecords();
+      $check(false, 'A failed lock must never fall through to native espionage');
+    } catch (RuntimeException $error) {
+      $check($error->getCode() === 1213, 'A failed shared lock must propagate its database error and stop processing');
+    } finally { SN::$db = $nativeDb; }
 
     $worker = proc_open([PHP_BINARY, __FILE__, '--lifecycle-worker', $prefix],
       [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
