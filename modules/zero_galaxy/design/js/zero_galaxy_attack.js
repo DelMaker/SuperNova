@@ -39,6 +39,19 @@
       title.appendChild(document.createTextNode(' ' + config.coords));
     }
     banner.appendChild(title);
+    if (config.groupName) {
+      var groupName = document.createElement('p');
+      groupName.textContent = config.groupName;
+      banner.appendChild(groupName);
+    }
+    (config.groups || []).forEach(function (group) {
+      var invite = document.createElement('p');
+      var join = document.createElement('a');
+      join.href = group.url;
+      join.textContent = labels.join + ': ' + group.name;
+      invite.appendChild(join);
+      banner.appendChild(invite);
+    });
     var table = document.createElement('table');
     table.style.cssText = 'width:auto;min-width:22em;';
     banner.appendChild(table);
@@ -57,6 +70,16 @@
     var limitMetric = metric(labels.limit);
     var selectedMetric = metric(labels.selected);
     var remainingMetric = metric(labels.remaining);
+    var acsArrival = Number(config.groupArrival || 0);
+    var acsArrivalMetric;
+    var acsReturnMetric;
+    if (config.groupId && isFinite(acsArrival) && acsArrival > 0) {
+      acsArrivalMetric = metric(labels.acsArrival);
+      acsReturnMetric = metric(labels.acsReturn);
+      var waitHint = document.createElement('p');
+      waitHint.textContent = labels.acsWait;
+      banner.appendChild(waitHint);
+    }
     var warning = document.createElement('div');
     warning.className = 'error';
     warning.style.marginTop = '0.35em';
@@ -80,15 +103,16 @@
       });
       var missionFields = form.querySelectorAll('[name="target_mission"]');
       if (!missionFields.length) {
-        setField('target_mission', 1);
+        setField('target_mission', config.mission || 1);
       }
       for (var m = 0; m < missionFields.length; m++) {
         if (missionFields[m].type === 'radio') {
-          missionFields[m].checked = missionFields[m].value === '1';
+          missionFields[m].checked = missionFields[m].value === String(config.mission || 1);
         } else {
-          missionFields[m].value = '1';
+          missionFields[m].value = String(config.mission || 1);
         }
       }
+      setField('fleet_group', config.groupId || 0);
       if (step === 1) {
         var coordinates = String(config.coords).match(/^\[0:(\d+):(\d+)\]$/);
         ['galaxy', 'system', 'planet'].forEach(function (name, index) {
@@ -123,6 +147,41 @@
     var fixedDistance = Number(config.distance);
     if (isFinite(fixedDistance) && fixedDistance > 0) {
       window.distance = function () { return fixedDistance; };
+    }
+
+    function updateAcsTimes() {
+      if (!acsArrivalMetric) { return; }
+      function formatTime(seconds, local) {
+        var date = new Date(seconds * 1000);
+        try {
+          return local ? date.toLocaleString() : date.toLocaleString(undefined, {timeZone: config.serverTimeZone});
+        } catch (error) { return date.toLocaleString(); }
+      }
+      function setTime(id, seconds, local) {
+        var field = document.getElementById(id);
+        if (field) { field.textContent = formatTime(seconds, local); }
+      }
+      acsArrivalMetric.value.textContent = formatTime(acsArrival, false);
+      setTime('time_dst', acsArrival, false);
+      setTime('time_dst_local', acsArrival, true);
+      var speedField = form && form.elements.namedItem('speed');
+      var speed = speedField && speedField.tagName ? String(speedField.value) : '10';
+      var naturalDuration = Number((config.travelDurations || {})[speed] || config.naturalDuration || 0);
+      acsReturnMetric.row.style.display = step > 0 && naturalDuration > 0 ? '' : 'none';
+      if (step > 0 && naturalDuration > 0) {
+        var returnAt = acsArrival + naturalDuration;
+        acsReturnMetric.value.textContent = formatTime(returnAt, false);
+        setTime('time_src', returnAt, false);
+        setTime('time_src_local', returnAt, true);
+      }
+    }
+    var nativeShortInfo = window.shortInfo;
+    if (acsArrivalMetric && typeof nativeShortInfo === 'function') {
+      window.shortInfo = function () {
+        var result = nativeShortInfo.apply(this, arguments);
+        updateAcsTimes();
+        return result;
+      };
     }
 
     var zero;
@@ -167,17 +226,18 @@
     selectedMetric.row.style.display = remainingMetric.row.style.display = showSelection ? '' : 'none';
 
     function update() {
+      updateAcsTimes();
       var selected = zero;
       var quantity = zero;
       var invalid = false;
-      function addShip(id, amount) {
+      function addShip(id, amount, existing) {
         var count = integer(amount === '' ? '0' : amount);
         var price = integer((config.unitCosts || {})[id]);
         if (count === null || (count > zero && price === null)) {
           invalid = true;
           return;
         }
-        quantity += count;
+        if (!existing) { quantity += count; }
         if (count > zero) {
           selected += count * price;
         }
@@ -192,6 +252,7 @@
       } else {
         Object.keys(config.fixedFleet || {}).forEach(function (id) { addShip(id, config.fixedFleet[id]); });
       }
+      Object.keys(config.existingFleet || {}).forEach(function (id) { addShip(id, config.existingFleet[id], true); });
       // Match the server: retain fractional unit costs, then floor the total once.
       selected = selected / costScale * costScale;
       var over = selected > limit;
@@ -219,6 +280,7 @@
       form.addEventListener('keyup', scheduleUpdate);
       form.addEventListener('click', scheduleUpdate);
       form.addEventListener('submit', function (event) {
+        setField('fleet_group', config.groupId || 0);
         if (update()) {
           event.preventDefault();
           event.stopImmediatePropagation();

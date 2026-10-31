@@ -17,7 +17,7 @@ $_GET = $_POST = $_COOKIE = $_REQUEST = [];
 define('IN_AJAX', true);
 $allow_anonymous = true;
 require getcwd() . '/common.php';
-foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'NativeDispatch', 'AttackSender', 'SpySender'] as $class) {
+foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'AcsPolicy', 'AcsService', 'NativeDispatch', 'AttackSender', 'SpySender'] as $class) {
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';
 }
 require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
@@ -41,7 +41,7 @@ $originalPlanet = $planetrow;
 $originalUserOptions = SN::$user_options;
 $originalDb = SN::$db;
 $prefix = 'zg_send_' . bin2hex(random_bytes(5)) . '_';
-$tables = ['zero_galaxy_npcs', 'zero_galaxy_rifts', 'zero_galaxy_state', 'captain', 'bashing', 'fleets', 'unit', 'planets', 'users'];
+$tables = ['zero_galaxy_npcs', 'zero_galaxy_rifts', 'zero_galaxy_state', 'captain', 'bashing', 'aks', 'fleets', 'unit', 'planets', 'users'];
 $assertions = 0;
 $check = function ($condition, $message) use (&$assertions) {
   $assertions++;
@@ -83,7 +83,7 @@ class DispatchRefreshFailure {
 
 try {
   if (!preg_match('/^[a-zA-Z0-9_]*$/D', $originalPrefix)) { throw new RuntimeException('Invalid source prefix'); }
-  foreach (['users', 'planets', 'unit', 'fleets', 'bashing', 'captain'] as $table) {
+  foreach (['users', 'planets', 'unit', 'fleets', 'bashing', 'captain', 'aks'] as $table) {
     $db->query("CREATE TABLE {$prefix}{$table} LIKE {$originalPrefix}{$table}");
   }
   // Every native {{table}} query now targets fresh isolated tables. Unit and
@@ -151,7 +151,7 @@ try {
   $state = function () use ($rows, $prefix): array {
     return [$rows("SELECT * FROM {$prefix}users ORDER BY id"), $rows("SELECT * FROM {$prefix}planets ORDER BY id"),
       $rows("SELECT * FROM {$prefix}unit ORDER BY unit_id"), $rows("SELECT * FROM {$prefix}fleets ORDER BY fleet_id"),
-      $rows("SELECT * FROM {$prefix}captain ORDER BY captain_id")];
+      $rows("SELECT * FROM {$prefix}captain ORDER BY captain_id"), $rows("SELECT * FROM {$prefix}aks ORDER BY id")];
   };
   $rejected = function (callable $callable, string $message, string $exact = null, string $class = InvalidArgumentException::class)
     use ($state, $expect, $check, $refresh, $scalar) {
@@ -433,6 +433,101 @@ try {
   $check($one("SELECT * FROM {$prefix}users WHERE id = {$otherId}") === $foreignBefore
     && $one("SELECT * FROM {$prefix}planets WHERE id = {$foreignId}") === $foreignPlanetBefore,
     'Rejected and successful sends must preserve unrelated human users and planets.');
+
+  // Native ACS rows with a deliberately slower leader give invited players a
+  // real synchronization window, while each player keeps the solo ten-fighter cap.
+  $refresh();
+  $leader = $send([SHIP_SMALL_FIGHTER_LIGHT => 6], 1, 0, $sourceId);
+  $leaderId = (int) $leader['fleet_id'];
+  $leaderRow = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id={$leaderId}");
+  $manage = new ReflectionMethod(\ZeroGalaxy\AcsService::class, 'manage');
+  $manage->setAccessible(true);
+  $manage->invoke(null, $leaderRow, $rift, array_replace($settings, ['acs_enabled' => true]), '');
+  $group = \Fleet\DbFleetStatic::dbAcsGetByFleet($leaderId);
+  $groupId = (int) $group['id'];
+  $check($groupId > 0 && (int) $scalar("SELECT fleet_mission FROM {$prefix}fleets WHERE fleet_id={$leaderId}") === MT_AKS,
+    'The module manager must create a native group and convert its leader to an ACS mission atomically.');
+  $join = function (int $count, array $overrides = []) use ($storage, $settings, $rift, $sourceId, $groupId) {
+    return AttackSender::send($storage, array_replace($settings, ['acs_enabled' => true], $overrides), $rift,
+      [SHIP_SMALL_FIGHTER_LIGHT => $count], 10, 0, $sourceId, $groupId);
+  };
+  $rejected(function () use ($join) { $join(1, ['acs_enabled' => false]); }, 'Disabled ACS must reject dispatch');
+  $rejected(function () use ($storage, $settings, $rift, $sourceId, $groupId) {
+    AttackSender::send($storage, $settings, $rift, [SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId, $groupId + 999);
+  }, 'Unknown ACS must reject dispatch');
+  $db->query("UPDATE {$prefix}aks SET eingeladen='{$otherId}' WHERE id={$groupId}");
+  $rejected(function () use ($join) { $join(1); }, 'Uninvited player must not join even with a valid group ID');
+  $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId}' WHERE id={$groupId}");
+  foreach (['galaxy' => 1, 'system' => 2, 'planet_type' => PT_MOON] as $field => $value) {
+    $db->query("UPDATE {$prefix}aks SET {$field}={$value} WHERE id={$groupId}");
+    $rejected(function () use ($join) { $join(1); }, 'Wrong ACS target ' . $field);
+    $db->query("UPDATE {$prefix}aks SET {$field}=" . (int) $group[$field] . " WHERE id={$groupId}");
+  }
+  $db->query("UPDATE {$prefix}aks SET ankunft=" . SN_TIME_NOW . " WHERE id={$groupId}");
+  $rejected(function () use ($join) { $join(1); }, 'Already due ACS cannot accept another fleet');
+  $db->query("UPDATE {$prefix}aks SET ankunft=" . (int) $group['ankunft'] . " WHERE id={$groupId}");
+  $refresh();
+  $atLimit = $join(4);
+  $member = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id=" . $atLimit['fleet_id']);
+  $check((int) $member['fleet_mission'] === MT_AKS && (int) $member['fleet_group'] === $groupId,
+    'A joining fleet must use native ACS mission and group fields.');
+  $check((int) $member['fleet_start_time'] === (int) $group['ankunft']
+    && (int) $member['fleet_end_time'] === (int) $group['ankunft'] + (int) $atLimit['travel']['duration'],
+    'Joining a slower ACS must synchronize arrival and preserve the member own return duration.');
+  $rejected(function () use ($manage, $member, $rift, $settings) {
+    $manage->invoke(null, $member, $rift, $settings, '');
+  }, 'An ordinary group member must not manage the leader invitations');
+  $rejected(function () use ($join) { $join(1); }, 'Multiple own fleets must share the same player cap', AttackPolicy::OVER_LIMIT);
+  $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId},{$otherId}' WHERE id={$groupId}");
+  $db->query("UPDATE {$prefix}users SET id_planet={$foreignId},current_planet={$foreignId},onlinetime=" . SN_TIME_NOW . " WHERE id={$otherId}");
+  foreach ([TECH_COMPUTER => 20, TECH_ENGINE_CHEMICAL => 8, SHIP_SMALL_FIGHTER_LIGHT => 50] as $id => $level) {
+    $location = $id === SHIP_SMALL_FIGHTER_LIGHT ? LOC_PLANET : LOC_USER;
+    $locationId = $location === LOC_PLANET ? $foreignId : $otherId;
+    $type = $id === SHIP_SMALL_FIGHTER_LIGHT ? UNIT_SHIPS : UNIT_TECHNOLOGIES;
+    $db->query("INSERT INTO {$prefix}unit (unit_player_id,unit_location_type,unit_location_id,unit_type,unit_snid,unit_level)
+      VALUES ({$otherId},{$location},{$locationId},{$type},{$id},{$level})");
+  }
+  DBStaticUnit::cache_clear();
+  $user = db_user_by_id($otherId, true); $planetrow = DBStaticPlanet::db_planet_by_id($foreignId, true);
+  $secondPlayer = AttackSender::send($storage, array_replace($settings, ['acs_enabled' => true]), $rift,
+    [SHIP_SMALL_FIGHTER_LIGHT => 10], 10, 0, $foreignId, $groupId);
+  $groupFleets = $rows("SELECT * FROM {$prefix}fleets WHERE fleet_group={$groupId}");
+  $check(count($groupFleets) === 3 && \ZeroGalaxy\AcsPolicy::playerCost($groupFleets, $actorId) === $profile['fleet_limit']
+    && \ZeroGalaxy\AcsPolicy::playerCost($groupFleets, $otherId) === $profile['fleet_limit'],
+    'Two players may each use the complete ordinary cap in one joint attack.');
+  $refresh();
+  $memberId = (int) $member['fleet_id'];
+  $db->query("UPDATE {$prefix}fleets SET fleet_array='" . SHIP_SMALL_FIGHTER_LIGHT . ",3' WHERE fleet_id={$memberId}");
+  $db->query("UPDATE {$prefix}aks SET ankunft=" . (SN_TIME_NOW + 1) . " WHERE id={$groupId}");
+  $db->query("UPDATE {$prefix}fleets SET fleet_start_time=" . (SN_TIME_NOW + 1) . " WHERE fleet_group={$groupId}");
+  $rejected(function () use ($join) { $join(1); }, 'Fleet too late for the group ETA must not launch', $lang['zero_galaxy_acs_too_late']);
+  $db->query("UPDATE {$prefix}aks SET ankunft=" . (int) $group['ankunft'] . " WHERE id={$groupId}");
+  $db->query("UPDATE {$prefix}fleets SET fleet_start_time=" . (int) $group['ankunft'] . " WHERE fleet_group={$groupId}");
+  $db->query("UPDATE {$prefix}fleets SET fleet_array='" . SHIP_SMALL_FIGHTER_LIGHT . ",4' WHERE fleet_id={$memberId}");
+  $token = \ZeroGalaxy\AcsService::token($actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId);
+  $check(\ZeroGalaxy\AcsService::validToken($token, $actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId, SN_TIME_NOW),
+    'The ACS form signature must accept its original context.');
+  $check(!\ZeroGalaxy\AcsService::validToken($token, $actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId + 1, SN_TIME_NOW),
+    'The ACS form signature must bind the selected group.');
+  $check(!\ZeroGalaxy\AcsService::validToken($token, $actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId, SN_TIME_NOW + AttackPolicy::TOKEN_TTL + 1),
+    'The ACS form signature must expire with the ordinary fleet form.');
+  $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId}' WHERE id={$groupId}");
+  $rejected(function () use ($join) { $join(1); }, 'A group with an uninvited existing member must not accept more fleets', $lang['zero_galaxy_acs_missing']);
+  $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId},{$otherId}' WHERE id={$groupId}");
+  $extraRows = [];
+  for ($i = 0; $i < 2; $i++) {
+    $eta = (int) $group['ankunft'];
+    $db->query("INSERT INTO {$prefix}fleets (fleet_owner,fleet_mission,fleet_amount,fleet_array,fleet_start_time,
+      fleet_start_planet_id,fleet_start_galaxy,fleet_start_system,fleet_start_planet,fleet_start_type,fleet_end_time,
+      fleet_end_planet_id,fleet_end_galaxy,fleet_end_system,fleet_end_planet,fleet_end_type,fleet_target_owner,fleet_group)
+      VALUES ({$otherId}," . MT_AKS . ",1,'" . SHIP_SMALL_FIGHTER_LIGHT . ",1',{$eta},{$foreignId},2,1,8,1,"
+      . ($eta + 1000) . ",{$targetId},0,1,1,1,{$npcId},{$groupId})");
+    $extraRows[] = (int) $db->insert_id;
+  }
+  $rejected(function () use ($join) { $join(1); }, 'A joint attack cannot exceed five flying subfleets', $lang['zero_galaxy_acs_full']);
+  $db->query("UPDATE {$prefix}fleets SET fleet_mess=" . FLEET_STATUS_RETURNING . ' WHERE fleet_id=' . $extraRows[0]);
+  $context = \ZeroGalaxy\AcsService::load($groupId, $actorId, $rift, array_replace($settings, ['acs_enabled' => true]));
+  $check(count($context['fleets']) === 4, 'A recalled subfleet must not consume a live ACS fleet slot.');
   echo "Attack and spy senders: {$assertions} assertions passed; native helpers used and isolated tables cleaned.\n";
 } finally {
   SN::$db = $originalDb;

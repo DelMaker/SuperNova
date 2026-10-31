@@ -1,0 +1,926 @@
+/* Graphite: flat charcoal surfaces with restrained oxblood accents.
+ * Artwork is inherited from supernova-ivash via skin.ini.
+ * Keep skin.min.css in sync: the game's asset loader prefers that file.
+ */
+:root {
+  color-scheme: dark;
+  --graphite-background: #141517;
+  --graphite-surface: #1d1f22;
+  --graphite-raised: #25272b;
+  --graphite-hover: #303237;
+  --graphite-border: #373a40;
+  --graphite-text: #e1e2e5;
+  --graphite-muted: #a4a7ae;
+  --graphite-accent: #803a40;
+  --graphite-accent-surface: #342328;
+  --graphite-focus: #b66e74;
+  --graphite-error: #eb949b;
+  --graphite-header-text: #d9b7bb;
+  --graphite-accent-border: #60343b;
+  --graphite-section: #2b2024;
+  --graphite-accent-hover: #4a2b32;
+}
+
+body {
+  background: var(--graphite-background);
+  color: var(--graphite-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 400;
+  line-height: 1.35;
+  scrollbar-color: var(--graphite-border) var(--graphite-background);
+}
+
+::selection {
+  background: var(--graphite-accent);
+  color: #fff;
+}
+
+th, .header, h1, h2, h3, .ui-widget-header {
+  font-weight: 600;
+}
+
+.cell, .th, .td, th, td, input, select, textarea {
+  background-color: var(--graphite-surface);
+  border-color: var(--graphite-border);
+}
+
+.header, .th, td.c, th.c_l, th.c_r, th.c_c, th.c_j,
+tr.c_l > th, tr.c_r > th, tr.c_c > th, tr.c_j > th,
+table.c_l th, table.c_r th, table.c_c th, table.c_j th,
+.bg_title, .bg_header, tr.bg_header > th, tr.bg_header > td, .header_bg,
+table:not(.markup):not(.noborder) > thead > tr > th,
+table:not(.markup):not(.noborder) > tbody > tr:first-child > th {
+  background: var(--graphite-accent-surface);
+}
+
+.subheader, tr.subheader > td, tr.subheader > th,
+.bg_subheader, tr > th.bg_subheader, tr > td.bg_subheader,
+.news_header, .survey_header, .survey_voted, .survey_confirm {
+  background: var(--graphite-section);
+}
+
+.bg_cell, td.l, .planet_list_fields, .planet_list_submoon_fields, .ov_struc_timer {
+  background: var(--graphite-surface);
+}
+
+/* Symmetric, continuous frames. Keep native selector specificity so festival CSS
+ * can replace the source, slices, repeat and widths. Absolute URLs also work in
+ * design/cache bundles. Do not add !important or border shorthands in this mode.
+ */
+body:not(.no_border_image) table:not(.markup):not(.noborder):not(.no_border_image):not(.border_image_small),
+body:not(.no_border_image) div#tab_container,
+body:not(.no_border_image) div.market_services,
+body:not(.no_border_image) .border_image_large {
+  border-width: 1em;
+  border-image-source: url("/skins/Graphite/images/border.svg");
+  border-image-slice: 11;
+  border-image-repeat: stretch;
+}
+
+body:not(.no_border_image) .border_image_small:not(.no_border_image),
+body:not(.no_border_image) .ui-dialog {
+  border-image-source: url("/skins/Graphite/images/border_small.svg");
+  border-image-repeat: stretch;
+}
+
+/* The player's opt-out keeps the compact flat layout, including dialogs/navbars. */
+body.no_border_image table:not(.markup):not(.noborder):not(.no_border_image):not(.border_image_small),
+body.no_border_image div#tab_container,
+body.no_border_image div.market_services,
+body.no_border_image .border_image_large,
+body.no_border_image .border_image_small:not(.no_border_image),
+body.no_border_image .ui-dialog {
+  border: 1px solid var(--graphite-border);
+  border-radius: 6px;
+}
+
+/* Layout-only tables must retain transparent cells. */
+.markup, .markup > tbody > tr, .markup > tbody > tr > th, .markup > tbody > tr > td,
+.transparent_cell {
+  background: transparent;
+}
+
+/* Content headings and framed surfaces share the navigation's hierarchy.
+ * Do not colour every TH: old templates also use TH for ordinary data cells.
+ */
+#__content > h1, #__content > h2 {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0.9em auto;
+  padding: 0.3em 0.6em;
+  border-bottom: 2px solid var(--graphite-accent);
+  color: var(--graphite-header-text);
+}
+
+[table_title]::before {
+  color: var(--graphite-header-text);
+}
+
+#__content table:not(.markup):not(.noborder):not(.no_border_image),
+#__content .border_image_large, #__content .border_image_small,
+#__content .quest_list, #__content .quest_admin_wrapper {
+  background-color: var(--graphite-surface);
+}
+
+#__content table:not(.markup):not(.noborder) {
+  border-radius: 5px;
+}
+
+#__content th, #__content td {
+  border-width: 1px;
+}
+
+#__content .spy_table tr.subheader > td,
+#__content .spy_table tr.subheader > th {
+  background: var(--graphite-section);
+}
+
+/* The overview's TH rows below the title contain planet data, not headings. */
+#planet_info_table > tbody > tr:not(:first-child) > th {
+  background: var(--graphite-surface);
+}
+
+#__content .ui-tabs .ui-tabs-panel,
+#__content #tab_container > div {
+  background: var(--graphite-surface);
+}
+
+a:not(.nohover):hover, .link:hover, td[go]:hover {
+  background-color: var(--graphite-hover);
+  text-decoration: none;
+}
+
+a:focus-visible, button:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, .button_pseudo:focus-visible {
+  outline: 2px solid var(--graphite-focus);
+  outline-offset: 2px;
+}
+
+/* Keep Ivash's hierarchy: TH rows are section headers, TD rows are subitems.
+ * Style the existing levels rather than maintaining a separate list of IDs,
+ * so customised menus and module-provided groups get the same treatment.
+ */
+#left_menu {
+  border-spacing: 0;
+  background: var(--graphite-surface);
+}
+
+#left_menu td, #left_menu th {
+  background: var(--graphite-surface);
+  border-color: var(--graphite-border);
+  padding: 0.2em 0.5rem;
+}
+
+#left_menu th {
+  background: var(--graphite-section);
+  color: var(--graphite-header-text);
+}
+
+#left_menu th a {
+  color: inherit;
+}
+
+#left_menu td a {
+  color: var(--graphite-text);
+}
+
+#left_menu .link_b {
+  border-bottom: 0.1em solid;
+  font-weight: 600;
+}
+
+#left_menu a:not(.lm_with_image) {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 1.8em;
+  padding: 0.2em 0.5em;
+  background: var(--graphite-raised);
+  border: 1px solid var(--graphite-border);
+  text-decoration: none;
+  border-radius: 4px;
+}
+
+#left_menu th a:not(.lm_with_image) {
+  justify-content: center;
+  background: var(--graphite-accent-surface);
+  border-color: var(--graphite-accent-border);
+}
+
+#left_menu td a:not(.lm_with_image) {
+  justify-content: flex-start;
+}
+
+#left_menu .menu_icons, #left_menu .menu_icon {
+  flex-shrink: 0;
+}
+
+#left_menu.MENU_NARROW_CELLS a:not(.lm_with_image) {
+  min-height: 1.4em;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+}
+
+#left_menu td a:hover, #left_menu th a:hover,
+#left_menu.MENU_NARROW_CELLS td a:hover, #left_menu.MENU_NARROW_CELLS th a:hover {
+  background: var(--graphite-accent-hover);
+  border-color: var(--graphite-accent);
+  color: #fff;
+}
+
+#menu_server_name td, #menu_server_launch td, #copyright {
+  color: var(--graphite-muted);
+}
+
+/* Navbar: the same graphite buttons and oxblood headers as the left menu.
+ * Keep the existing markup, queue overlays, links and Ivash sprite geometry.
+ */
+#navbar {
+  box-sizing: border-box;
+  padding: 0;
+  background: var(--graphite-surface);
+  border-radius: 6px;
+}
+
+#navbar:not(.resbar_v) {
+  width: calc(100% - 2rem);
+  max-width: 76em;
+}
+
+#navbar #navbar_planet_wrapper {
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  padding: 0.75em 1em;
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+  border-radius: 5px 5px 0 0;
+}
+
+#navbar #navbar_planet_select {
+  flex: 1 1 18em;
+  min-width: 0;
+  max-width: 28em;
+  margin: 0;
+  padding: 0.4em 0.5em;
+  background: var(--graphite-surface);
+  border-color: var(--graphite-accent-border);
+  color: var(--graphite-header-text);
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+#navbar #navbar_player_count {
+  margin: 0;
+  padding: 0.4em 0.6em;
+  color: var(--graphite-muted);
+  font-size: 1em;
+  white-space: nowrap;
+}
+
+#navbar .js_global_users_online, #navbar .js_global_users_total {
+  color: var(--graphite-text);
+  font-variant-numeric: tabular-nums;
+}
+
+#navbar #navbar-container-time {
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  padding: 0.6em 1em;
+  background: var(--graphite-raised);
+  border-bottom: 1px solid var(--graphite-border);
+}
+
+#navbar .navbar-container-time-item {
+  text-align: left;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+#navbar .navbar-container-time-item > .ok, #navbar #navbar_time_server {
+  color: var(--graphite-text);
+}
+
+#navbar #navbar_time_local_title, #navbar #navbar_time_server_title {
+  color: var(--graphite-muted);
+}
+
+#navbar #navbar_font_wrapper {
+  flex-wrap: wrap;
+  gap: 0.4em;
+}
+
+#navbar #navbar_font_wrapper .ui-button {
+  margin: 0;
+  background: var(--graphite-surface);
+  border-color: var(--graphite-border);
+}
+
+#navbar #navbar_font_wrapper .ui-button.ui-state-hover,
+#navbar #navbar_font_wrapper .ui-button.ui-state-active {
+  background: var(--graphite-accent-surface);
+  border-color: var(--graphite-accent);
+}
+
+#navbar #navbar-container-button {
+  justify-content: center;
+  gap: 0.6em;
+  padding: 0.9em;
+  background: var(--graphite-surface);
+}
+
+#navbar .navbar_button {
+  flex: 0 0 auto;
+  width: 6.5em;
+  height: 7.9em;
+  margin: 0;
+  overflow: hidden;
+  background: var(--graphite-raised);
+  border: 1px solid var(--graphite-border);
+  border-radius: 5px;
+  color: var(--graphite-text);
+}
+
+#navbar .navbar_button.wide {
+  width: 13em;
+}
+
+#navbar .navbar_button:hover {
+  background: var(--graphite-hover);
+  border-color: var(--graphite-accent);
+}
+
+#navbar .navbar_button > .sprite_navbar_buttons {
+  top: 1.3em;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+}
+
+/* These two sprite cells have half the zoom of the 64px cells. */
+#navbar .navbar_button > .navbar_hangar_button,
+#navbar .navbar_button > .navbar_defense_button {
+  top: 2.6em;
+}
+
+#navbar .navbar_button_image {
+  top: 1.6em;
+  left: 50%;
+  width: 77.438px;
+  max-width: 100%;
+  height: 77.438px;
+  object-fit: cover;
+  transform: translateX(-50%);
+}
+
+#navbar .navbar_button > .posLT.w100,
+#navbar .navbar_button_que > .bld_que_total_time_text,
+#navbar .navbar_button[go_url="messages.php"]::after {
+  box-sizing: border-box;
+  padding: 0.15em 0.2em;
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+  color: var(--graphite-header-text);
+  font-weight: 600;
+}
+
+/* The original message card has no text header; reuse its translated title. */
+#navbar .navbar_button[go_url="messages.php"]::after {
+  content: attr(title);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+}
+
+#navbar .navbar_button > .posRB,
+#navbar .navbar_button[go_url="messages.php"] > span > .posRB {
+  box-sizing: border-box;
+  padding: 0.1em 0.3em;
+  background: rgba(29, 31, 34, 0.92);
+  font-variant-numeric: tabular-nums;
+}
+
+#navbar .navbar-container-button-que-empty {
+  top: 50%;
+  box-sizing: border-box;
+  padding: 0.2em;
+  background: rgba(29, 31, 34, 0.9);
+  color: var(--graphite-muted);
+  font-size: 0.9em;
+  font-weight: 400;
+}
+
+#navbar .navbar_button_que {
+  background: transparent;
+}
+
+#navbar .navbar_button_que_current_unit {
+  background: rgba(29, 31, 34, 0.8);
+}
+
+#navbar #navbar_resources_flex {
+  gap: 0.5em;
+  padding: 0.75em;
+  background: var(--graphite-raised);
+  border-top: 1px solid var(--graphite-border);
+  border-radius: 0 0 5px 5px;
+}
+
+#navbar .navbar_resources_flex_title {
+  color: var(--graphite-header-text);
+  padding: 0.3em;
+}
+
+#navbar .navbar_resbar_flex_wrap2, #navbar .navbar_resbar_flex_wrap1 {
+  gap: 0.5em;
+  min-width: 0;
+}
+
+#navbar .navbar_resources_flex_resource.cell {
+  flex-basis: auto;
+  gap: 0.5em;
+  margin: 0;
+  padding: 0.4em 0.5em;
+  background: var(--graphite-surface);
+  border: 1px solid var(--graphite-border);
+  border-radius: 4px;
+}
+
+#navbar .navbar_resources_flex_resource.cell:hover {
+  border-color: var(--graphite-accent);
+}
+
+#navbar .navbar_resource_numbers {
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+#navbar.resbar_v #navbar_resources_flex {
+  border-top: 0;
+  border-left: 1px solid var(--graphite-border);
+  border-radius: 0 5px 5px 0;
+}
+
+/* The legacy resource table may also be displayed outside #navbar. */
+#navbar_container #navbar_resources {
+  background: var(--graphite-surface);
+  border-color: var(--graphite-border);
+}
+
+#navbar_container #navbar_resources th {
+  background: var(--graphite-accent-surface);
+  color: var(--graphite-header-text);
+}
+
+/* jQuery UI uses its own theme, so explicitly replace its blue surfaces. */
+.ui-widget {
+  font-family: inherit;
+}
+
+.ui-widget-content, .ui-widget-header,
+.ui-widget-content a, .ui-widget-header a {
+  color: var(--graphite-text);
+  border-color: var(--graphite-border);
+}
+
+.ui-widget-content, .ui-dialog .ui-dialog-content,
+div .ui-dialog-content table, div#tab_container > div,
+.ui-tabs .ui-tabs-panel {
+  background: var(--graphite-surface);
+}
+
+body .ui-dialog {
+  background: var(--graphite-surface);
+  border-radius: 6px;
+}
+
+/* Some game dialogs set the old blue background directly in JavaScript. */
+.ui-dialog .ui-dialog-content {
+  background-color: var(--graphite-surface) !important;
+}
+
+.ui-widget-header, .ui-dialog .ui-dialog-buttonpane {
+  background: var(--graphite-raised);
+}
+
+.ui-dialog .ui-dialog-titlebar,
+.ui-datepicker .ui-datepicker-header,
+.ui-accordion .ui-accordion-header {
+  background: var(--graphite-accent-surface);
+  border-color: var(--graphite-accent-border);
+  color: var(--graphite-header-text);
+}
+
+.ui-widget-header .ui-icon {
+  background-image: url("/design/css/images/ui-icons_e6ebfb_256x240.png");
+}
+
+.ui-state-default, .ui-widget-content .ui-state-default,
+.ui-widget-header .ui-state-default, .button_pseudo:not(img) {
+  background: var(--graphite-raised);
+  border-color: var(--graphite-border);
+  color: var(--graphite-text);
+}
+
+.ui-state-default a, .ui-state-default a:link, .ui-state-default a:visited {
+  color: inherit;
+}
+
+.ui-state-hover, .ui-widget-content .ui-state-hover,
+.ui-widget-header .ui-state-hover, .ui-state-focus,
+.ui-widget-content .ui-state-focus, .ui-widget-header .ui-state-focus,
+.button_pseudo:not(img):hover {
+  background: var(--graphite-hover);
+  border-color: var(--graphite-accent);
+  color: var(--graphite-text);
+}
+
+.ui-state-hover a, .ui-state-hover a:link, .ui-state-hover a:visited,
+.ui-state-focus a, .ui-state-focus a:link, .ui-state-focus a:visited {
+  color: inherit;
+}
+
+.ui-state-active, .ui-widget-content .ui-state-active,
+.ui-widget-header .ui-state-active, .button_pseudo_pressed:not(img) {
+  background: var(--graphite-accent-surface);
+  border-color: var(--graphite-accent);
+  color: var(--graphite-text);
+}
+
+.ui-state-active a, .ui-state-active a:link, .ui-state-active a:visited {
+  color: inherit;
+}
+
+.ui-button, .button_pseudo {
+  box-shadow: none;
+}
+
+/* Remove the old pressed-button offset to keep neighbouring controls still. */
+.ui-button.ui-state-active, .button_pseudo_pressed {
+  margin: 0.5em;
+}
+
+input, select, textarea, div.z,
+input.ui-input-text, textarea.ui-textfield, .ui-button.ui-input-text {
+  background: var(--graphite-background);
+  border-color: var(--graphite-border);
+  color: var(--graphite-text);
+  font-family: inherit;
+}
+
+input[type=checkbox], input[type=radio] {
+  appearance: auto;
+  accent-color: var(--graphite-accent);
+  background: var(--graphite-background);
+  border-color: var(--graphite-border);
+  color: var(--graphite-text);
+  vertical-align: middle;
+}
+
+input[type=checkbox]:checked {
+  background-color: var(--graphite-accent);
+  color: var(--graphite-accent);
+}
+
+input:disabled, select:disabled, textarea:disabled, button:disabled,
+.ui-state-disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.ui-tabs.ui-widget-content {
+  background: transparent;
+}
+
+.ui-tabs .ui-tabs-nav {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--graphite-border);
+  border-radius: 0;
+}
+
+.ui-tabs .ui-tabs-nav li {
+  box-shadow: none;
+}
+
+.ui-tabs .ui-tabs-nav li.ui-tabs-active {
+  background: var(--graphite-accent-surface);
+  border-color: var(--graphite-accent);
+  box-shadow: inset 0 2px var(--graphite-accent);
+}
+
+.ui-widget-overlay {
+  background: #000;
+  opacity: 0.65;
+}
+
+.ui-tooltip {
+  background: var(--graphite-raised);
+  color: var(--graphite-text);
+  box-shadow: 0 4px 16px #0006;
+}
+
+.ui-state-highlight, .ui-widget-content .ui-state-highlight,
+.ui-widget-header .ui-state-highlight {
+  background: var(--graphite-raised);
+  border-color: var(--graphite-muted);
+  color: #e4cf9c;
+}
+
+.ui-state-error, .ui-widget-content .ui-state-error,
+.ui-widget-header .ui-state-error, td.error_message {
+  background: var(--graphite-accent-surface);
+  border-color: var(--graphite-accent);
+  color: var(--graphite-error);
+}
+
+.ui-state-error-text, .ui-widget-content .ui-state-error-text,
+.ui-widget-header .ui-state-error-text {
+  color: var(--graphite-error);
+}
+
+.ui-slider, .ui-progressbar {
+  background: var(--graphite-background);
+}
+
+div.ui-slider-range, .ui-progressbar .ui-progressbar-value {
+  background: var(--graphite-accent);
+  border-color: var(--graphite-accent);
+}
+
+.unit_preview, #tab_tech_tree .tech_container,
+.planet-manage-governor-hire-container, .survey_block, .ov_planet_fill_bar {
+  border-color: var(--graphite-border);
+}
+
+.unit_border_selected {
+  border-color: var(--graphite-accent);
+}
+
+/* Buildings, research, officers, ships and technology cards. All artwork stays
+ * on its original element; only the frame and text overlays change.
+ */
+.unit_preview, .unit_miniatures_wrapper, .unit_info_wrapper,
+.ship_miniature_container:not(.old), #tab_tech_tree .tech_container,
+.payment_type_block, .rank-table > div {
+  background-color: var(--graphite-surface);
+  border: 1px solid var(--graphite-border);
+  border-radius: 5px;
+}
+
+.unit_preview, .unit_miniatures_wrapper, #unit_info_image_outer {
+  overflow: hidden;
+}
+
+.unit_preview:hover, .unit_miniatures_wrapper:hover,
+#tab_tech_tree .tech_container:hover {
+  border-color: var(--graphite-accent);
+}
+
+.unit_preview.unit_border_selected {
+  border-color: var(--graphite-accent);
+  box-shadow: 0 0 0 1px var(--graphite-accent);
+}
+
+.unit_preview .name, #unit_info_name, .unit_info_name,
+#tab_tech_tree .tech_image > span, .ship_miniature_name,
+.payment_type_name {
+  box-sizing: border-box;
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+  color: var(--graphite-header-text);
+  font-weight: 600;
+}
+
+.unit_preview .level, .unit_preview .count, .unit_preview .time,
+.unit_preview .resource_container, #unit_info_level, .unit_info_level {
+  background: rgba(29, 31, 34, 0.9);
+}
+
+/* Retain the unavailable overlay without hiding the underlying Ivash image. */
+.unit_preview > span.unit_preview_image {
+  background: rgba(20, 21, 23, 0.4);
+}
+
+.unit_preview .restrict {
+  background: rgba(29, 31, 34, 0.94);
+}
+
+.unit_preview .negative {
+  color: var(--graphite-error);
+}
+
+.unit_preview .positive {
+  color: #a1d1a8;
+}
+
+#unit_info_image_outer {
+  border: 1px solid var(--graphite-border);
+  border-radius: 5px;
+  box-sizing: border-box;
+}
+
+#unit_balance > table tr:nth-child(odd) td {
+  background-color: var(--graphite-raised);
+}
+
+/* Planet cards include an inline selection border in the old templates. */
+.planet_info_overview {
+  background: var(--graphite-surface);
+  border: 1px solid var(--graphite-border) !important;
+  border-radius: 6px !important;
+}
+
+.planet_info_overview[style*="dashed green"] {
+  border-color: var(--graphite-accent) !important;
+  box-shadow: inset 0 2px var(--graphite-accent);
+}
+
+.planet_info_overview .planet_list_fields,
+.planet_info_overview .ov_struc_timer,
+.planet_info_overview .planet_list_submoon_fields {
+  background: var(--graphite-raised);
+}
+
+.rank-selected, .rank-table > .rank-selected {
+  border-color: var(--graphite-accent);
+}
+
+.planet-manage-sectors-container {
+  border-color: var(--graphite-border);
+  background: var(--graphite-background);
+}
+
+/* The resource template hardcodes this blue frame; keep the status fill. */
+#__content th[style*="rgb(153, 153, 255)"] {
+  border-color: var(--graphite-border) !important;
+}
+
+.quest_filter_wrapper {
+  padding: 0.6em;
+  background: var(--graphite-raised);
+  border-bottom: 1px solid var(--graphite-border);
+}
+
+.quest_wrapper .quest_header {
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+}
+
+.quest_wrapper .quest_details > div {
+  background: var(--graphite-raised);
+  border: 1px solid var(--graphite-border);
+  border-radius: 4px;
+}
+
+.news_header, .survey_header {
+  border-bottom: 1px solid var(--graphite-accent-border);
+  border-radius: 4px 4px 0 0;
+}
+
+.note_header {
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+}
+
+.news_text, .survey_block {
+  background: var(--graphite-surface);
+}
+
+.paging .current {
+  padding: 0.1em 0.4em;
+  background: var(--graphite-accent-surface);
+  border-radius: 4px;
+  color: var(--graphite-header-text);
+}
+
+/* Message templates supply additional CSS after the main stylesheet. */
+#__content .pm_subject {
+  padding: 0.4em 0.6em;
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+}
+
+#__content .pm_text {
+  padding: 0.8em;
+  background: var(--graphite-surface);
+}
+
+/* Message categories used to paint their entire descendant tree white/teal.
+ * Keep the categories recognisable through text and unread-message accents.
+ */
+.mnl_outbox, .mnl_outbox *, .mnl_joueur, .mnl_joueur *,
+.mnl_alliance, .mnl_alliance *, .msg_admin, .msg_admin * {
+  background-color: var(--graphite-surface);
+}
+
+.msg_admin, .msg_admin * {
+  color: #c5a1d1;
+}
+
+.mnl_buildlist, .mnl_buildlist * {
+  color: #a4bbcd;
+}
+
+.mnl_exploit, .ownharvest, .nick_moderator {
+  color: #8aba93;
+}
+
+.owncolony {
+  color: #9aaecf;
+}
+
+.ownmissile {
+  color: #d1a189;
+}
+
+.new_message, .new_message * {
+  background-color: var(--graphite-accent-surface);
+  color: var(--graphite-header-text);
+}
+
+.battle_report_link {
+  background-color: var(--graphite-raised);
+  color: var(--graphite-header-text);
+}
+
+tr.highlight:hover {
+  color: var(--graphite-header-text);
+  text-decoration: none;
+}
+
+#shoutbox > .chat_a {
+  border-top-color: var(--graphite-border);
+}
+
+.checkator_element, .checkator_element.checkbox {
+  background: var(--graphite-background);
+  border-color: var(--graphite-border);
+}
+
+.checkator_source:checked + .checkator_element::after {
+  background: var(--graphite-accent);
+}
+
+.checkator_source:hover + .checkator_element {
+  border-color: var(--graphite-focus);
+}
+
+div.market_services {
+  background: transparent;
+  padding: 0;
+}
+
+.market_services div:first-child {
+  background: var(--graphite-surface);
+  padding: 0.5em;
+  margin-bottom: 0;
+}
+
+.market_services > div > div:first-child {
+  background: var(--graphite-accent-surface);
+  border-bottom: 1px solid var(--graphite-accent-border);
+  color: var(--graphite-header-text);
+}
+
+.market_services > div > .button_pseudo {
+  min-width: 10em;
+  border-top-color: var(--graphite-accent);
+}
+
+#chat_color_select, #chat_message_smiles2, #chat_command_menu, #chat_muted_tooltip,
+.chat_online, #onlinebox td, .chat_message, #chat_msg_wrapper #msg,
+#shoutbox, #shoutbox > table, #shoutbox > table > tbody > tr,
+#shoutbox > table > tbody > tr > td {
+  background-color: var(--graphite-surface);
+  border-color: var(--graphite-border);
+}
+
+/* CSS sprites bypass skin.ini. Use Ivash's sheets and original sprite mapping
+ * (supernova-ivash by Ivash) explicitly and keep their
+ * original geometry so navbar images and small action icons are unchanged.
+ */
+.icons {
+  background-image: url("/skins/supernova-ivash/images/icons.png");
+}
+
+.sprite_navbar_buttons {
+  background-image: url("/skins/supernova-ivash/images/sprite_navbar_buttons_ivash.png");
+  display: inline-block;
+}
+.navbar_research_button_wide { background-position: -64px -192px; width: 128px; height: 64px; zoom: calc(77.438/64); }
+.navbar_research_button { background-position: 0 -192px; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_hangar_button { background-position: -128px 0; width: 128px; height: 128px; zoom: calc(77.438/128); }
+.navbar_expedition_button { background-position: -320px 0; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_fleet_own_button { background-position: 0 -128px; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_quest_button { background-position: -192px -128px; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_mail_button { background-position: -64px -128px; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_dark_matter_button { background-position: -256px 0; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_metamatter_button { background-position: -128px -128px; width: 64px; height: 64px; zoom: calc(77.438/64); }
+.navbar_defense_button { background-position: 0 0; width: 128px; height: 128px; zoom: calc(77.438/128); }

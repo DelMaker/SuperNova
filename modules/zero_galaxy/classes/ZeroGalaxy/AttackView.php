@@ -27,9 +27,15 @@ class AttackView {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_bad_request']);
       }
       $riftId = self::integer($post ? ($_POST['rift_id'] ?? null) : ($_GET['rift_id'] ?? null));
+      $groupId = self::integer(($post ? $_POST : $_GET)['acs_group'] ?? 0);
+      if ($groupId < 0) { throw new InvalidArgumentException($lang['zero_galaxy_attack_bad_request']); }
       $sourceId = $post ? self::integer($_POST['source_id'] ?? null) : (int) $planetrow['id'];
       $issuedAt = $post ? self::integer($_POST['token_at'] ?? null) : SN_TIME_NOW;
       if ($post && !AttackPolicy::validToken($_POST['token'] ?? null, $issuedAt, (int) $user['id'], $sourceId, $riftId, SN_TIME_NOW)) {
+        throw new InvalidArgumentException($lang['zero_galaxy_attack_expired_form']);
+      }
+      if ($post && $groupId && !AcsService::validToken($_POST['acs_token'] ?? null,
+        (int) $user['id'], $sourceId, $riftId, $issuedAt, $groupId, SN_TIME_NOW)) {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_expired_form']);
       }
       $rift = $storage->findById($riftId, SN_TIME_NOW);
@@ -38,24 +44,26 @@ class AttackView {
         || !in_array(Lifecycle::phase($rift, SN_TIME_NOW), ['active', 'unstable'], true)) {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_missing']);
       }
+      $acs = $groupId ? AcsService::load($groupId, (int) $user['id'], $rift, $settings) : null;
+      if ($acs && count($acs['fleets']) >= 5) { throw new InvalidArgumentException($lang['zero_galaxy_acs_full']); }
       $source = DBStaticPlanet::db_planet_by_id($sourceId);
       if (!$source || (int) $source['id_owner'] !== (int) $user['id']) {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_bad_request']);
       }
       $planetrow = $source;
       $galaxy = 0; $system = (int) $rift['system']; $planet = (int) $rift['position'];
-      $planet_type = PT_PLANET; $target_mission = MT_ATTACK;
+      $planet_type = PT_PLANET; $target_mission = $acs ? MT_AKS : MT_ATTACK;
       $TargetPlanet = DBStaticPlanet::db_planet_by_id((int) $rift['planet_id']);
       if (!$TargetPlanet || (int) $TargetPlanet['galaxy'] !== 0
         || (int) $TargetPlanet['id_owner'] !== (int) $rift['owner_id']) {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_missing']);
       }
-      if ($post) { self::validateContext($rift); }
+      if ($post) { self::validateContext($rift, $groupId); }
       $MaxFleets = GetMaxFleets($user);
       $FlyingFleets = DbFleetStatic::fleet_count_flying($user['id']);
       $MaxExpeditions = get_player_max_expeditons($user);
       $FlyingExpeditions = $MaxExpeditions ? DbFleetStatic::fleet_count_flying($user['id'], MT_EXPLORE) : 0;
-      $missiontype = [MT_ATTACK => $lang['type_mission'][MT_ATTACK]];
+      $missiontype = [$target_mission => $lang['type_mission'][$target_mission]];
       $is_transport_missions = false;
       $fleetarray = [];
       $speed_percent = $step > 1 ? self::integer($_POST['speed'] ?? null) : 10;
@@ -65,13 +73,17 @@ class AttackView {
       if ($step > 0) {
         $fleetarray = $step === 1 ? AttackPolicy::ships($_POST['ships'] ?? null)
           : AttackPolicy::decode($_POST['usedfleet'] ?? null);
-        if (AttackPolicy::cost($fleetarray) > $limit) { throw new InvalidArgumentException(AttackPolicy::OVER_LIMIT); }
+        $cost = $acs ? AcsPolicy::playerCost($acs['fleets'], (int) $user['id'], $fleetarray) : AttackPolicy::cost($fleetarray);
+        if ($cost > $limit) { throw new InvalidArgumentException(AttackPolicy::OVER_LIMIT); }
         foreach ($fleetarray as $id => $count) {
           if ($count > mrc_get_level($user, $source, $id, false, true) || get_ship_data($id, $user)['speed'] <= 0) {
             throw new InvalidArgumentException($lang['fl_attack_error'][ATTACK_NO_SHIPS]);
           }
         }
         $travel = flt_travel_data($user, $source, $TargetPlanet, $fleetarray, $speed_percent, [], \Universe::getBaseGalaxyDistance());
+        if ($acs && SN_TIME_NOW + $travel['duration'] > (int) $acs['group']['ankunft']) {
+          throw new InvalidArgumentException($lang['zero_galaxy_acs_too_late']);
+        }
         $consumption = $travel['consumption']; $fleet_speed = $travel['fleet_speed'];
         $distance = $travel['distance']; $duration = $travel['duration'];
         $_POST['ships'] = $fleetarray;
@@ -80,17 +92,27 @@ class AttackView {
       $result = null;
       if ($step === 3) {
         $result = AttackSender::send($storage, $settings, $rift, $fleetarray, $speed_percent,
-          isset($_POST['captain_id']) ? self::integer($_POST['captain_id']) : 0, $sourceId);
+          isset($_POST['captain_id']) ? self::integer($_POST['captain_id']) : 0, $sourceId, $groupId);
       }
       $targetName = RiftName::forRift($rift, Lifecycle::phase($rift, SN_TIME_NOW),
         (string) ($lang['zero_galaxy_time']['locale'] ?? 'ru'));
       $TargetPlanet['name'] = $targetName;
-      $payload = self::payload($rift, $step, $fleetarray, $targetName, $sourceId, $issuedAt);
+      $payload = self::payload($rift, $step, $fleetarray, $targetName, $sourceId, $issuedAt, $acs);
+      $payload['naturalDuration'] = (int) ($travel['duration'] ?? 0);
+      if ($acs && $step === 1) {
+        // The leader fixes arrival; only each participant's return leg changes
+        // with speed. Keep the preview on the same native calculation as send.
+        foreach (range(1, 10) as $candidateSpeed) {
+          $payload['travelDurations'][$candidateSpeed] = (int) flt_travel_data($user, $source, $TargetPlanet,
+            $fleetarray, $candidateSpeed, [], \Universe::getBaseGalaxyDistance())['duration'];
+        }
+      }
+      $payload['groups'] = !$groupId && $step === 0 ? AcsService::invitedGroups($rift, (int) $user['id'], $settings) : [];
       $template_result = array_replace((array) $template_result, [
         'thisgalaxy' => (int) $source['galaxy'], 'thissystem' => (int) $source['system'],
         'thisplanet' => (int) $source['planet'], 'thisplanet_type' => (int) $source['planet_type'],
         'galaxy' => 0, 'system' => $system, 'planet' => $planet, 'planet_type' => PT_PLANET,
-        'target_mission' => MT_ATTACK, 'MISSION_NAME' => $lang['type_mission'][MT_ATTACK],
+        'target_mission' => $target_mission, 'MISSION_NAME' => $lang['type_mission'][$target_mission],
         'TYPE_NAME' => $lang['fl_planettype'][PT_PLANET], 'ZERO_ATTACK_STEP' => $step,
         'ZERO_ATTACK_JSON' => json_encode($payload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR),
         'ZERO_ATTACK_SCRIPT_URL' => SN_ROOT_RELATIVE . $module->getRootRelative()
@@ -118,9 +140,9 @@ class AttackView {
     return (int) $value;
   }
 
-  private static function validateContext(array $rift): void {
+  private static function validateContext(array $rift, int $groupId = 0): void {
     $fixed = ['galaxy' => 0, 'system' => (int) $rift['system'], 'planet' => (int) $rift['position'],
-      'planet_type' => PT_PLANET, 'target_mission' => MT_ATTACK, 'fleet_group' => 0];
+      'planet_type' => PT_PLANET, 'target_mission' => $groupId ? MT_AKS : MT_ATTACK, 'fleet_group' => $groupId];
     foreach ($fixed as $key => $value) {
       if (isset($_POST[$key]) && self::integer($_POST[$key]) !== $value) {
         throw new InvalidArgumentException(SN::$lang['zero_galaxy_attack_bad_request']);
@@ -133,7 +155,8 @@ class AttackView {
     }
   }
 
-  private static function payload(array $rift, int $step, array $ships, string $targetName, int $sourceId, int $issuedAt): array {
+  private static function payload(array $rift, int $step, array $ships, string $targetName, int $sourceId, int $issuedAt,
+    array $acs = null): array {
     global $user, $lang;
     $prices = [];
     $scale = 1;
@@ -145,19 +168,31 @@ class AttackView {
     }
     foreach ($prices as $id => $price) { $prices[$id] = sprintf('%.0F', round($price * $scale)); }
     $profile = Profile::read($rift);
+    $groupId = $acs ? (int) $acs['group']['id'] : 0;
+    $existing = [];
+    foreach ($acs['fleets'] ?? [] as $fleet) {
+      if ((int) $fleet['fleet_owner'] !== (int) $user['id']) { continue; }
+      foreach (sys_unit_str2arr($fleet['fleet_array']) as $id => $count) { $existing[$id] = ($existing[$id] ?? 0) + $count; }
+    }
     $limit = (string) AttackPolicy::limit($rift) . ($scale === 1 ? '' : '000000');
     return ['step' => $step, 'riftId' => (int) $rift['rift_id'], 'limit' => $limit,
       'unitCosts' => $prices, 'costScale' => (string) $scale, 'fixedFleet' => array_map('strval', $ships),
+      'existingFleet' => array_map('strval', $existing), 'groupId' => $groupId, 'mission' => $groupId ? MT_AKS : MT_ATTACK,
+      'groupName' => $acs['group']['name'] ?? '',
+      'groupArrival' => (int) ($acs['group']['ankunft'] ?? 0), 'serverTimeZone' => date_default_timezone_get(),
       'distance' => \Universe::getBaseGalaxyDistance(),
       'nextUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_attack&step=' . ($step + 1),
       'fields' => ['rift_id' => (int) $rift['rift_id'], 'source_id' => $sourceId, 'token_at' => $issuedAt,
-        'token' => AttackPolicy::token((int) $user['id'], $sourceId, (int) $rift['rift_id'], $issuedAt)],
+        'token' => AttackPolicy::token((int) $user['id'], $sourceId, (int) $rift['rift_id'], $issuedAt),
+        'acs_group' => $groupId, 'acs_token' => AcsService::token((int) $user['id'], $sourceId, (int) $rift['rift_id'], $issuedAt, $groupId)],
       'targetName' => $targetName, 'color' => $profile['category']['color'],
       'coords' => '[0:' . $rift['system'] . ':' . $rift['position'] . ']',
-      'labels' => ['limit' => $lang['zero_galaxy_fleet_limit'], 'selected' => $lang['zero_galaxy_attack_selected'],
+      'labels' => ['limit' => $lang['zero_galaxy_fleet_limit'], 'selected' => $groupId ? $lang['zero_galaxy_acs_selected'] : $lang['zero_galaxy_attack_selected'],
         'remaining' => $lang['zero_galaxy_attack_remaining'], 'over' => $lang['zero_galaxy_attack_over'],
         'points' => $lang['zero_galaxy_points_short'], 'attackTitle' => $lang['zero_galaxy_attack_title'],
-        'missing' => $lang['zero_galaxy_attack_missing']]];
+        'missing' => $lang['zero_galaxy_attack_missing'], 'join' => $lang['zero_galaxy_acs_join'],
+        'acsArrival' => $lang['zero_galaxy_acs_arrival'], 'acsReturn' => $lang['zero_galaxy_acs_return'],
+        'acsWait' => $lang['zero_galaxy_acs_wait']]];
   }
 
   /** Escape once at the module display hook; payloads and planet records keep their raw names. */
@@ -190,7 +225,7 @@ class AttackView {
         'AMOUNT' => $count, 'AMOUNT_TEXT' => \HelperString::numberFloorAndFormat($count)]);
     }
     $travel = $result['travel'];
-    $template->assign_vars(['mission' => $lang['type_mission'][MT_ATTACK],
+    $template->assign_vars(['mission' => $lang['type_mission'][$result['mission'] ?? MT_ATTACK],
       'dist' => \HelperString::numberFloorAndFormat($travel['distance']),
       'speed' => \HelperString::numberFloorAndFormat($travel['fleet_speed']),
       'deute_need' => \HelperString::numberFloorAndFormat($travel['consumption']),

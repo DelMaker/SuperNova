@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="88" height="88" viewBox="0 0 88 88">
+  <title>Graphite small table frame</title>
+  <!-- Equal 11px slices. Every edge has a constant cross-section; only corners carry accents. -->
+  <path fill="#292d32" fill-rule="evenodd" d="M5 1H83L87 5V83L83 87H5L1 83V5ZM11 11V77H77V11Z"/>
+  <path fill="none" stroke="#50555d" d="M5 1.5H83L86.5 5V83L83 86.5H5L1.5 83V5Z"/>
+  <path fill="none" stroke="#40454c" d="M8 7.5H80L80.5 8V80L80 80.5H8L7.5 80V8Z"/>
+  <path fill="none" stroke="#0b0e12" stroke-width="2" d="M10 10H78V78H10Z"/>
+  <path fill="#803a40" d="M3 6L6 3H10L3 10ZM78 3H82L85 6V10ZM3 78L10 85H6L3 82ZM78 85L85 78V82L82 85Z"/>
+</svg>

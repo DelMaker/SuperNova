@@ -36,6 +36,7 @@ abstract class RiftMissionEvent extends FleetDispatchEvent {
       }
       $this->planetIdsToLock = array_values(array_unique($this->planetIdsToLock));
       $this->userIdsToLock = array_values(array_unique($this->userIdsToLock));
+      $this->refreshAdditionalLocks();
     }
     $result = parent::lockEventRecords();
     if ($this->moduleRecordsLocked) {
@@ -43,6 +44,9 @@ abstract class RiftMissionEvent extends FleetDispatchEvent {
     }
     return $result;
   }
+
+  /** Subclasses may extend the native discovery snapshot under the lifecycle mutex. */
+  protected function refreshAdditionalLocks(): void {}
 
   private function lockModuleRecords(): bool {
     $prefix = SN::$db->db_prefix;

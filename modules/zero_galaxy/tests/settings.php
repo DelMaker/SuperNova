@@ -19,6 +19,9 @@ $check = function ($condition, $message) use (&$assertions) {
 
 $defaults = Settings::load();
 $check($defaults['target_active_per_system'] === 2.0, 'Default density must be two.');
+$check($defaults['acs_enabled'] === true, 'ACS must be enabled by default.');
+$check(Settings::load(['acs_enabled' => false])['acs_enabled'] === false, 'ACS may be disabled globally.');
+$check(Settings::load(['acs_enabled' => true])['acs_enabled'] === true, 'ACS may be explicitly enabled.');
 $changed = Settings::load(['target_active_per_system' => 0, 'active_seconds' => [3, 9], 'refresh_seconds' => 1]);
 $check($changed['target_active_per_system'] === 0.0, 'Zero must disable generation.');
 $check($changed['active_seconds'] === [3, 9], 'Overrides must replace the entire duration range.');
@@ -81,6 +84,12 @@ $check(Settings::load(['categories' => ['tiny' => ['phases_hours' => ['energy' =
   ['categories']['tiny']['phases_hours']['energy']['mean'] > 0, 'Positive subsecond means are supported and clamp to one second.');
 
 foreach ([
+  ['acs_enabled' => 0],
+  ['acs_enabled' => 1],
+  ['acs_enabled' => 'false'],
+  ['acs_enabled' => 'true'],
+  ['acs_enabled' => null],
+  ['acs_enabled' => []],
   ['target_active_per_system' => -1],
   ['target_active_per_system' => INF],
   ['target_active_per_system' => NAN],

@@ -17,6 +17,10 @@ class Settings {
     }
     $settings = array_replace($defaults, $overrides);
 
+    if (!is_bool($settings['acs_enabled'])) {
+      throw new InvalidArgumentException('Invalid boolean: acs_enabled');
+    }
+
     if (!is_numeric($settings['target_active_per_system']) || !is_finite((float) $settings['target_active_per_system'])
       || $settings['target_active_per_system'] < 0 || $settings['target_active_per_system'] > 10000) {
       throw new InvalidArgumentException('Invalid target_active_per_system');

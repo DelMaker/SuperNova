@@ -57,5 +57,6 @@ return [
   'closed_seconds' => [3600, 7200],
   'refresh_seconds' => 30,
   'fleet_limit_multiplier' => 1.25,
+  'acs_enabled' => true,
   'categories' => $categories,
 ];

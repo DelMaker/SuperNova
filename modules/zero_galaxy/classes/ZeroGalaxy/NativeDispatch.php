@@ -25,14 +25,19 @@ class NativeDispatch {
   }
 
   public static function launch(array $user, array $source, array $target, array $ships, int $mission, array $travel,
-    int $targetType = PT_PLANET): array {
+    int $targetType = PT_PLANET, int $groupId = 0, int $groupArrival = 0): array {
     if (!db_mysql::$db_in_transaction || !SN::$db->transactionCheck()) {
       throw new RuntimeException('Zero Galaxy dispatch requires the caller transaction');
     }
     if ($targetType !== ($mission === MT_RECYCLE ? PT_DEBRIS : PT_PLANET)) {
       throw new RuntimeException('Zero Galaxy dispatch target type does not match its mission');
     }
-    $arrival = SN_TIME_NOW + (int) $travel['duration'];
+    $naturalArrival = SN_TIME_NOW + (int) $travel['duration'];
+    if ($mission === MT_AKS ? ($groupId < 1 || $groupArrival < $naturalArrival)
+      : ($groupId !== 0 || $groupArrival !== 0)) {
+      throw new RuntimeException('Invalid Zero Galaxy ACS dispatch');
+    }
+    $arrival = $groupId ? $groupArrival : $naturalArrival;
     $returnAt = $arrival + (int) $travel['duration'];
     $fleetId = DbFleetStatic::fleet_insert_set_dbq([
       'fleet_owner' => (int) $user['id'], 'fleet_mission' => $mission,
@@ -43,7 +48,7 @@ class NativeDispatch {
       'fleet_end_time' => $returnAt, 'fleet_end_planet_id' => (int) $target['id'],
       'fleet_end_galaxy' => 0, 'fleet_end_system' => (int) $target['system'],
       'fleet_end_planet' => (int) $target['planet'], 'fleet_end_type' => $targetType,
-      'fleet_target_owner' => (int) $target['id_owner'], 'fleet_group' => 0, 'start_time' => SN_TIME_NOW,
+      'fleet_target_owner' => (int) $target['id_owner'], 'fleet_group' => $groupId, 'start_time' => SN_TIME_NOW,
     ]);
     if (!$fleetId) { throw new RuntimeException('Zero Galaxy fleet was not created'); }
     $changes = [];
@@ -55,7 +60,7 @@ class NativeDispatch {
       || !OldDbChangeSet::db_changeset_apply(['unit' => $changes])) {
       throw new RuntimeException('Zero Galaxy dispatch resources were not deducted');
     }
-    return ['fleet_id' => (int) $fleetId, 'arrival' => $arrival, 'return_at' => $returnAt];
+    return ['fleet_id' => (int) $fleetId, 'arrival' => $arrival, 'return_at' => $returnAt, 'mission' => $mission];
   }
 
   /** A failed display refresh must never turn a committed launch into failure. */

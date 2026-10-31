@@ -167,7 +167,7 @@ define('SN_COOKIE_U', SN_COOKIE . '_U'); // Current user cookie aka user ID
 define('SN_COOKIE_U_I', SN_COOKIE_U . AUTH_COOKIE_IMPERSONATE_SUFFIX); // Current impersonator user cookie aka impersonator user ID
 define('SN_COOKIE_WEBP', SN_COOKIE . '_WEBP'); // WebP support cookie
 
-define('DEFAULT_SKIN_NAME', 'EpicBlue');
+define('DEFAULT_SKIN_NAME', basename(rtrim(SN::$config->game_default_skin ?: 'skins/EpicBlue/', '/')));
 define('DEFAULT_SKINPATH', SN::$config->game_default_skin ?: 'skins/' . DEFAULT_SKIN_NAME . '/');
 
 define('DEFAULT_LANG', SN::$config->game_default_language ?: 'ru');

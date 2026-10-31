@@ -1,0 +1,27 @@
+<h1>{L_zero_galaxy_acs_title}</h1>
+<p>{L_zero_galaxy_acs_hint}</p>
+<!-- IF ZERO_ACS_FLEET_ID -->
+  <!-- IF ZERO_ACS_GROUP_NAME -->
+    <h3>{ZERO_ACS_GROUP_NAME}</h3>
+    <p><a href="{ZERO_ACS_JOIN_URL}">{L_zero_galaxy_acs_join}</a></p>
+    <ul><!-- BEGIN zero_acs_members --><li>{zero_acs_members.NAME}</li><!-- END zero_acs_members --></ul>
+  <!-- ENDIF -->
+  <!-- IF ZERO_ACS_CAN_MANAGE -->
+  <form method="post" action="{ZERO_ACS_ACTION}">
+    <input type="hidden" name="fleetid" value="{ZERO_ACS_FLEET_ID}">
+    <input type="hidden" name="token_at" value="{ZERO_ACS_TOKEN_AT}">
+    <input type="hidden" name="acs_token" value="{ZERO_ACS_TOKEN}">
+    <label for="zero_acs_invite">{L_flt_aks_player_invite}</label>
+    <input id="zero_acs_invite" name="addtogroup" type="text">
+    <button type="submit">{L_zero_galaxy_acs_create_invite}</button>
+  </form>
+  <!-- ENDIF -->
+<!-- ELSE -->
+  <ul>
+  <!-- BEGIN zero_acs_groups -->
+    <li>{zero_acs_groups.COORDS} {zero_acs_groups.NAME} — <a href="{zero_acs_groups.URL}">{L_zero_galaxy_acs_join}</a></li>
+  <!-- BEGINELSE zero_acs_groups -->
+    <li>{L_zero_galaxy_acs_no_invitations}</li>
+  <!-- END zero_acs_groups -->
+  </ul>
+<!-- ENDIF -->
