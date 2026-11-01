@@ -243,6 +243,10 @@ class zero_galaxy extends sn_module {
   }
 
   public function sendSpy($template = null) {
+    $this->sendAjax(SpySender::class);
+  }
+
+  private function sendAjax(string $sender): void {
     if (!defined('IN_AJAX')) {
       define('IN_AJAX', true);
     }
@@ -252,7 +256,7 @@ class zero_galaxy extends sn_module {
       die(SN::$lang['zero_galaxy_unavailable']);
     }
 
-    die(SpySender::send($this->storage, $this->settings));
+    die($sender::send($this->storage, $this->settings));
   }
 
   public function attack($template = null) {
@@ -271,16 +275,7 @@ class zero_galaxy extends sn_module {
   }
 
   public function sendRecyclers($template = null) {
-    if (!defined('IN_AJAX')) {
-      define('IN_AJAX', true);
-    }
-    setHeader('Content-Type: text/plain; charset=utf-8');
-    if (!$this->worldReady()) {
-      http_response_code(503);
-      die(SN::$lang['zero_galaxy_unavailable']);
-    }
-
-    die(RecycleSender::send($this->storage, $this->settings));
+    $this->sendAjax(RecycleSender::class);
   }
 
   public function decorateView($template = null) {
@@ -303,10 +298,8 @@ class zero_galaxy extends sn_module {
       return $template;
     }
     AttackView::escapeFleetNames($template);
-    $step = (int) $template->_rootref['ZERO_ATTACK_STEP'];
     $template->_rootref['ZERO_ATTACK_WRAPPED'] = true;
-    // Replace the native root handle; the wrapper includes that native file.
     $template->files = $template->filename = $template->files_inherit = [];
-    return $this->addModuleTemplate('zero_galaxy_attack_' . $step, $template);
+    return $this->addModuleTemplate('zero_galaxy_attack', $template);
   }
 }

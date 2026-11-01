@@ -60,13 +60,7 @@ class StatisticsTestCache {
 $db = statisticsTestDb();
 $prefix = 'zg_stat_test_' . bin2hex(random_bytes(5)) . '_';
 $tables = ['zero_galaxy_state', 'zero_galaxy_npcs', 'config', 'users'];
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) {
-    throw new RuntimeException($message);
-  }
-};
+require __DIR__ . '/support/assertions.php';
 $scalar = function ($sql) use ($db) {
   return $db->query($sql)->fetch_row()[0];
 };

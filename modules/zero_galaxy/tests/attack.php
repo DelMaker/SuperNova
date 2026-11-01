@@ -202,11 +202,7 @@ namespace {
     exit;
   }
 
-  $assertions = 0;
-  $check = function ($condition, $message) use (&$assertions) {
-    $assertions++;
-    if (!$condition) { throw new \RuntimeException($message); }
-  };
+  require __DIR__ . '/support/assertions.php';
 
   $fleet = [];
   $combat = attackCombat();

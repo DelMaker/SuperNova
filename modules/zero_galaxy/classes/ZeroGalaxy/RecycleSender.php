@@ -3,12 +3,10 @@
 namespace ZeroGalaxy;
 
 use DBAL\db_mysql;
-use Planet\DBStaticPlanet;
 use SN;
 use Throwable;
 
 class RecycleSender {
-  /** Quick native recycler selection, with the rift lifecycle locked until commit. */
   public static function send(Storage $storage, array $settings): string {
     global $user, $planetrow, $lang;
 
@@ -44,26 +42,14 @@ class RecycleSender {
         return self::rollback($lang['zero_galaxy_recycle_missing']);
       }
       $sourceId = (int) $user['current_planet'];
-      $ownerId = RiftTarget::ownerId($rift, (int) $state['npc_owner_id']);
-      $targetId = (int) $rift['planet_id'];
-      SN::$gc->db->lockRecords([
-        'users' => [(int) $user['id'], $ownerId], 'planets' => [$sourceId, $targetId],
-      ]);
-      $user = db_user_by_id($user['id'], true);
-      $source = DBStaticPlanet::db_planet_by_id($sourceId, true);
-      $target = DBStaticPlanet::db_planet_by_id($targetId, true);
-      $npc = db_user_by_id($ownerId, true);
-      if (!$source || (int) $source['id_owner'] !== (int) $user['id']
-        || !RiftTarget::matches($rift, $target, $npc, (int) $state['npc_owner_id'], SN_TIME_NOW)) {
-        return self::rollback($lang['zero_galaxy_recycle_missing']);
-      }
+      $locked = NativeDispatch::lockTarget($user, $rift, (int) $state['npc_owner_id'], $sourceId);
+      if (!$locked) { return self::rollback($lang['zero_galaxy_recycle_missing']); }
+      [$user, $source, $target] = $locked;
       $debris = (float) $target['debris_metal'] + (float) $target['debris_crystal'];
       if (!is_finite($debris) || $debris <= 0) {
         return self::rollback($lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
       }
 
-      // Native selection includes fuel in transport capacity and selects only
-      // needed ships, up to actual inventory and available deuterium.
       $from = $source;
       $from['galaxy'] = 1;
       $available = [];
@@ -89,12 +75,10 @@ class RecycleSender {
         return self::rollback($lang['fl_attack_error'][$allowed]);
       }
       $travel = flt_travel_data($user, $source, $target, $fleet, 10, [], \Universe::getBaseGalaxyDistance());
-      if ($travel['fleet_speed'] <= 0 || $travel['duration'] < 1
-        || $travel['consumption'] > $travel['capacity']
-        || mrc_get_level($user, $source, RES_DEUTERIUM) < $travel['consumption']) {
+      if ($travel['duration'] < 1) {
         return self::rollback($lang['gs_c13']);
       }
-      NativeDispatch::launch($user, $source, $target, $fleet, MT_RECYCLE, $travel, PT_DEBRIS);
+      NativeDispatch::launch($user, $source, $target, $fleet, MT_RECYCLE, $travel);
       $remaining = $owned - array_sum($fleet);
       db_mysql::db_transaction_commit();
     } catch (Throwable $error) {

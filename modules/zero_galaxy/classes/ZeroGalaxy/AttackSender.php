@@ -4,7 +4,6 @@ namespace ZeroGalaxy;
 
 use DBAL\db_mysql;
 use InvalidArgumentException;
-use Planet\DBStaticPlanet;
 use RuntimeException;
 use SN;
 use Throwable;
@@ -39,33 +38,20 @@ class AttackSender {
         || !in_array(Lifecycle::phase($rift, SN_TIME_NOW), ['active', 'unstable'], true)) {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_missing']);
       }
-      $ownerId = RiftTarget::ownerId($rift, (int) $state['npc_owner_id']);
-      $targetId = (int) $rift['planet_id'];
       $group = $groupId ? AcsService::group($groupId, (int) $user['id'], $rift, $settings, true) : null;
-      $owners = [(int) $user['id'], $ownerId];
-      if ($group) { $owners = array_merge($owners, array_map('intval', explode(',', $group['eingeladen']))); }
-      SN::$gc->db->lockRecords(['users' => array_values(array_unique($owners)), 'planets' => [$sourceId, $targetId]]);
-      $user = db_user_by_id($user['id'], true);
-      $source = DBStaticPlanet::db_planet_by_id($sourceId, true);
-      $target = DBStaticPlanet::db_planet_by_id($targetId, true);
-      $npc = db_user_by_id($ownerId, true);
-      if (!$source || (int) $source['id_owner'] !== (int) $user['id']
-        || !RiftTarget::matches($rift, $target, $npc, (int) $state['npc_owner_id'], SN_TIME_NOW)) {
+      $owners = $group ? array_map('intval', explode(',', $group['eingeladen'])) : [];
+      $locked = NativeDispatch::lockTarget($user, $rift, (int) $state['npc_owner_id'], $sourceId, $owners);
+      if (!$locked) {
         throw new InvalidArgumentException($lang['zero_galaxy_attack_missing']);
       }
+      [$user, $source, $target] = $locked;
       $context = $group ? AcsService::load($groupId, (int) $user['id'], $rift, $settings, true) : null;
       if ($context && count($context['fleets']) >= 5) { throw new InvalidArgumentException($lang['zero_galaxy_acs_full']); }
       $cost = $context ? AcsPolicy::playerCost($context['fleets'], (int) $user['id'], $ships) : AttackPolicy::cost($ships);
       if ($cost > $limit) { throw new InvalidArgumentException(AttackPolicy::OVER_LIMIT); }
 
-      foreach ($ships as $id => $count) {
-        if ($count > mrc_get_level($user, $source, $id, true, true)) {
-          throw new InvalidArgumentException($lang['fl_attack_error'][ATTACK_NO_SHIPS]);
-        }
-      }
       $allowed = NativeDispatch::allowed($user, $source, $target, $ships, MT_ATTACK, $speed);
-      // NPC fleet budgets replace player point protection. All preceding native
-      // availability, inventory, speed, fuel and slot checks remain in force.
+      // Rift fleet limits replace native player-point protection.
       if ($allowed !== ATTACK_ALLOWED && $allowed !== ATTACK_NOOB) {
         throw new InvalidArgumentException($lang['fl_attack_error'][$allowed] ?? $lang['zero_galaxy_attack_failed']);
       }
@@ -73,8 +59,7 @@ class AttackSender {
       if ($group && SN_TIME_NOW + $travel['duration'] > (int) $group['ankunft']) {
         throw new InvalidArgumentException($lang['zero_galaxy_acs_too_late']);
       }
-      if ($travel['fleet_speed'] <= 0 || $travel['duration'] < 1 || $travel['consumption'] > $travel['capacity']
-        || $source['deuterium'] < $travel['consumption']) {
+      if ($travel['duration'] < 1) {
         throw new InvalidArgumentException($lang['fl_attack_error'][ATTACK_NO_FUEL]);
       }
       $captain = null;
@@ -87,7 +72,7 @@ class AttackSender {
         }
       }
       $dispatch = NativeDispatch::launch($user, $source, $target, $ships, $group ? MT_AKS : MT_ATTACK, $travel,
-        PT_PLANET, $groupId, $group ? (int) $group['ankunft'] : 0);
+        $groupId, $group ? (int) $group['ankunft'] : 0);
       if ($captain && !DBStaticUnit::db_unit_set_by_id($captainId,
         'unit_location_type = ' . LOC_FLEET . ', unit_location_id = ' . $dispatch['fleet_id'])) {
         throw new RuntimeException('Zero Galaxy captain was not assigned to the fleet');

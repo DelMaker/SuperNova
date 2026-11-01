@@ -52,10 +52,7 @@ namespace {
     }
   }
 
-  $assertions = 0;
-  $check = function ($condition, string $message) use (&$assertions): void {
-    $assertions++; if (!$condition) { throw new \RuntimeException($message); }
-  };
+  require __DIR__ . '/support/assertions.php';
   $route = new \ReflectionMethod(zero_galaxy::class, 'routeNativeAcs');
   $route->setAccessible(true);
   $configuration = new \ReflectionProperty(\Modules\sn_module::class, 'config');

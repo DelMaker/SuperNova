@@ -111,11 +111,7 @@ namespace {
     $template->_rootref = &$template->_tpldata['.'][0];
     return \ZeroGalaxy\UniverseView::render(new DebrisFixtureModule(), $template, $rows, 10, 50, ['refresh_seconds' => 30]);
   };
-  $assertions = 0;
-  $check = function ($condition, $message) use (&$assertions) {
-    $assertions++;
-    if (!$condition) { throw new RuntimeException($message); }
-  };
+  require __DIR__ . '/support/assertions.php';
   $template = $render($rifts);
   $rows = $template->_tpldata['galaxyrow'];
   $payload = json_decode($template->_rootref['ZERO_RIFTS_JSON'], true);

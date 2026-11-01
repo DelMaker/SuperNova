@@ -44,7 +44,6 @@ class Profile {
     return array_key_last($available);
   }
 
-  /** Uses the same weighted resource cost as the native statistics. */
   public static function nativeUnit(int $id, int $type): array {
     $unit = get_unit_param($id);
     if (!$unit || (int) ($unit['type'] ?? 0) !== $type || (float) ($unit['cost']['factor'] ?? 1) !== 1.0) {
@@ -64,7 +63,6 @@ class Profile {
       $info = $unitInfo((int) $id, $type);
       $prices[$id] = $info['cost'];
       $limits[$id] = $info['max'];
-      // Independent compositions make reconnaissance useful within one category.
       $drawn[$id] = $weight * random_int(50, 150) / 100;
     }
     if (!$drawn) { throw new RuntimeException('Zero galaxy army has no enabled units'); }
@@ -85,7 +83,6 @@ class Profile {
     return ['units' => $army, 'points' => (int) round($spent)];
   }
 
-  /** Unit resolver and exchange rates are explicit so generation can be checked without a game bootstrap. */
   public static function create(string $key, array $category, float $limitMultiplier, array $rates,
     callable $unitInfo = null): array {
     $unitInfo = $unitInfo ?? [self::class, 'nativeUnit'];

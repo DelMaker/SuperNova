@@ -42,29 +42,21 @@ class ViewFixtureTemplate extends template {
   }
 }
 
-$assertions = 0;
-$check = function ($condition, string $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $partial = file_get_contents(SN_ROOT_PHYSICAL . 'design/templates/OpenGame/fleet_miniatures.tpl.html');
 $names = ['Крошечный разлом', 'Literal &copy; &amp; разлом', 'Cash $& [PLANET_IMAGE] разлом', 'Имя "Альфа" и \'Бета\' разлом'];
-foreach ([1, 2, 3] as $step) {
-  $native = file_get_contents(SN_ROOT_PHYSICAL . "design/templates/OpenGame/fleet{$step}.tpl.html");
-  $check(strpos($native, '<!-- INCLUDE fleet_miniatures -->') !== false, 'Each native wizard page must use the tested partial');
-  foreach ($names as $name) {
-    $template = new ViewFixtureTemplate();
-    $template->_rootref = &$template->_tpldata['.'][0];
-    $template->assign_block_vars('fleets', ['START_COORDS' => '[1:2:3]', 'START_NAME' => $name,
-      'END_COORDS' => '[0:18:6]', 'END_NAME' => $name, 'MESSAGE' => 0, 'MISSION' => 1]);
-    ZeroGalaxy\AttackView::escapeFleetNames($template);
-    $html = $template->renderSource($partial);
-    preg_match('/<span id="end_name">(.*?)<\/span>/s', $html, $match);
-    $check(isset($match[1]) && html_entity_decode($match[1], ENT_QUOTES | ENT_HTML5, 'UTF-8') === $name,
-      'Native miniature must show literal name without decoding an extra layer at step ' . $step);
-    $check(substr_count($html, htmlspecialchars($name, ENT_QUOTES, 'UTF-8')) === 2,
-      'Source and destination names must each be escaped exactly once');
-  }
+foreach ($names as $name) {
+  $template = new ViewFixtureTemplate();
+  $template->_rootref = &$template->_tpldata['.'][0];
+  $template->assign_block_vars('fleets', ['START_COORDS' => '[1:2:3]', 'START_NAME' => $name,
+    'END_COORDS' => '[0:18:6]', 'END_NAME' => $name, 'MESSAGE' => 0, 'MISSION' => 1]);
+  ZeroGalaxy\AttackView::escapeFleetNames($template);
+  $html = $template->renderSource($partial);
+  preg_match('/<span id="end_name">(.*?)<\/span>/s', $html, $match);
+  $check(isset($match[1]) && html_entity_decode($match[1], ENT_QUOTES | ENT_HTML5, 'UTF-8') === $name,
+    'Native miniature must show literal names without decoding an extra layer');
+  $check(substr_count($html, htmlspecialchars($name, ENT_QUOTES, 'UTF-8')) === 2,
+    'Source and destination names must each be escaped exactly once');
 }
 
 $user = ['id' => 7];

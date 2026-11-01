@@ -2,7 +2,6 @@
 
 namespace ZeroGalaxy;
 
-/** Hide native ACS controls for zero-galaxy targets while keeping mission data intact. */
 class AcsView {
   public static function decorate($module, $template, array $settings) {
     if (!is_object($template) || !empty($settings['acs_enabled'])
@@ -29,7 +28,6 @@ class AcsView {
       }
       if ($hasZeroFleet) {
         $template->assign_var('ZERO_GALAXY_ACS_FILTERED', true);
-        // Preserve native mission IDs, labels, CSS classes, timers and recall controls.
         $template->files = $template->filename = $template->files_inherit = [];
         return $module->addModuleTemplate('zero_galaxy_flying_fleets', $template);
       }

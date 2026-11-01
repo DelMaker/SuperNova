@@ -5,11 +5,7 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AttackLink.php';
 
 use ZeroGalaxy\AttackLink;
 
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $query = ['galaxy' => '0', 'system' => '199', 'planet' => '8', 'planet_type' => '1', 'target_mission' => '1'];
 $resolve = function ($parameters, $page = 'fleet', $method = 'GET') {
   return AttackLink::nativeCoordinates($page, $method, $parameters, 199, 15);

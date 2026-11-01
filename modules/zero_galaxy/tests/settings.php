@@ -9,13 +9,7 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Settings.php';
 
 use ZeroGalaxy\Settings;
 
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) {
-    throw new RuntimeException($message);
-  }
-};
+require __DIR__ . '/support/assertions.php';
 
 $defaults = Settings::load();
 $check($defaults['target_active_per_system'] === 2.0, 'Default density must be two.');

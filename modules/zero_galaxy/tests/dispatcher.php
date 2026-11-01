@@ -99,11 +99,7 @@ namespace {
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftFleetDispatcher.php';
   require_once dirname(__DIR__) . '/zero_galaxy.php';
 
-  $assertions = 0;
-  $check = function ($condition, string $message) use (&$assertions): void {
-    $assertions++;
-    if (!$condition) { throw new \RuntimeException($message); }
-  };
+  require __DIR__ . '/support/assertions.php';
   $fixture = function ($dispatcher, bool $frozen = false) {
     \ZeroGalaxy\Storage::$ticks = \ZeroGalaxy\UniverseView::$calls = \ZeroGalaxy\AttackView::$calls = 0;
     SN::$gc = new DispatcherFixtureContainer($dispatcher, $frozen);

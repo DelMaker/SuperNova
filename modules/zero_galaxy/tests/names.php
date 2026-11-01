@@ -12,11 +12,7 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
 use ZeroGalaxy\RiftName;
 use ZeroGalaxy\Storage;
 
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $rift = function (array $category, int $version = 1): array {
   return ['rift_id' => 7, 'config_snapshot' => json_encode([
     'profile' => ['version' => $version, 'category' => $category],

@@ -93,11 +93,7 @@ $prefix = $worker ? ($argv[2] ?? '') : 'zg_recycle_' . bin2hex(random_bytes(5)) 
 if (!preg_match('/^zg_recycle_[a-f0-9]{10}_$/D', $prefix)) { throw new RuntimeException('An isolated recycling prefix is required'); }
 SN::$db = (object) ['link' => $db, 'db_prefix' => $prefix];
 SN::$gc = (object) ['db' => new RecycleFixtureLocks()];
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $one = function (string $table, string $condition = '1=1') use ($db, $prefix) {
   return $db->query('SELECT * FROM ' . $prefix . $table . ' WHERE ' . $condition)->fetch_assoc();
 };

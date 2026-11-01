@@ -39,11 +39,7 @@ function doquery($sql) {
   return $db->query(preg_replace('/\{\{([a-z_]+)\}\}/', $prefix . '$1', $sql));
 }
 
-$assertions = 0;
-$check = function ($condition, string $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $newTemplate = function (): AdminFixtureTemplate {
   $template = new AdminFixtureTemplate();
   $template->_rootref = &$template->_tpldata['.'][0];

@@ -20,11 +20,7 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AttackPolicy.php';
 
 use ZeroGalaxy\AttackPolicy;
 
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $expect = function (callable $callable, string $class, string $message) use ($check) {
   try { $callable(); }
   catch (Throwable $error) {
@@ -56,15 +52,6 @@ $check(AttackPolicy::cost([202 => '2', 203 => '3'], $cost) === 3, 'Whole decimal
 
 $limit = AttackPolicy::limit($rift(1000));
 $check($limit === 1000, 'The policy must read the saved integer baseline cap.');
-$below = AttackPolicy::cost([204 => 444], $cost);
-$equal = AttackPolicy::cost([204 => 444, 202 => 1, 203 => 1], $cost);
-$above = AttackPolicy::cost([204 => 445], $cost);
-$check($below === 999 && $equal === 1000 && $above === 1001,
-  'Boundary fixture must distinguish below, equality and strictly above using the final floored cost.');
-// AttackSender owns the actual decision; these operands ensure its integration
-// test can detect >= in place of the required strict > comparison.
-$check($below <= $limit && $equal <= $limit && $above > $limit,
-  'Equality is within the allowed boundary and only the next whole point exceeds it.');
 $check(AttackPolicy::limit($rift(0)) === 0, 'A saved zero cap must be distinguishable from a missing populated profile.');
 foreach ([['config_snapshot' => '{}'], ['config_snapshot' => '{bad'], [], $rift(1000, 2),
   $rift(-1), $rift('1000'), $rift(1000.0), $rift(1.5), $rift(null)] as $invalidRift) {

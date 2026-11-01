@@ -13,11 +13,7 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AcsPolicy.php';
 
 use ZeroGalaxy\AcsPolicy;
 
-$assertions = 0;
-$check = function ($condition, string $message) use (&$assertions): void {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $reject = function (callable $call, string $message) use ($check): void {
   try { $call(); }
   catch (InvalidArgumentException $error) { $check(true, $message); return; }

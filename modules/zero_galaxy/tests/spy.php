@@ -171,13 +171,7 @@ class SpyFixtureMission extends RiftEspionage {
   }
 }
 
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) {
-    throw new RuntimeException($message);
-  }
-};
+require __DIR__ . '/support/assertions.php';
 
 foreach ([
   [10, 20, 9, 0, 40, ['fleet', 'tech']],

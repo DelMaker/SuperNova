@@ -3,15 +3,10 @@
 namespace ZeroGalaxy;
 
 use DBAL\db_mysql;
-use Planet\DBStaticPlanet;
 use SN;
 use Throwable;
 
 class SpySender {
-  /**
-   * The caller reconciles lifecycle changes before entering this method.
-   * A normal MT_SPY fleet is dispatched by the existing game worker afterwards.
-   */
   public static function send(Storage $storage, array $settings): string {
     global $user, $planetrow, $lang;
 
@@ -54,7 +49,6 @@ class SpySender {
 
     db_mysql::db_transaction_start();
     try {
-      // Same first lock as Storage::tick(): a rift cannot close while we launch.
       $state = SN::$db->doquery("SELECT * FROM `{$prefix}zero_galaxy_state` WHERE id = 1 FOR UPDATE", true);
       $rift = SN::$db->doquery("SELECT * FROM `{$prefix}zero_galaxy_rifts`
         WHERE system = {$system} AND position = {$position} FOR UPDATE", true);
@@ -65,21 +59,9 @@ class SpySender {
       }
 
       $sourceId = (int) $user['current_planet'];
-      $targetId = (int) $rift['planet_id'];
-      $ownerId = RiftTarget::ownerId($rift, (int) $state['npc_owner_id']);
-      SN::$gc->db->lockRecords([
-        'users' => [(int) $user['id'], $ownerId],
-        'planets' => [$sourceId, $targetId],
-      ]);
-
-      $user = db_user_by_id($user['id'], true);
-      $source = DBStaticPlanet::db_planet_by_id($sourceId, true);
-      $target = DBStaticPlanet::db_planet_by_id($targetId, true);
-      $npc = db_user_by_id($ownerId, true);
-      if (!$source || (int) $source['id_owner'] !== (int) $user['id']
-        || !RiftTarget::matches($rift, $target, $npc, (int) $state['npc_owner_id'], SN_TIME_NOW)) {
-        return self::rollbackMissing();
-      }
+      $locked = NativeDispatch::lockTarget($user, $rift, (int) $state['npc_owner_id'], $sourceId);
+      if (!$locked) { return self::rollbackMissing(); }
+      [$user, $source, $target] = $locked;
 
       $owned = max(0, (int) mrc_get_level($user, $source, SHIP_SPY, false, true));
       $probes = min($owned, $requested);
@@ -90,18 +72,14 @@ class SpySender {
 
       $fleet = [SHIP_SPY => $probes];
       $allowed = NativeDispatch::allowed($user, $source, $target, $fleet, MT_SPY, 10);
-      // NPC reconnaissance is independent of player point protection. All
-      // native vacation, availability, fuel, cargo and fleet-slot checks run
-      // before this result; the target's module ownership is already verified.
+      // Rift reconnaissance ignores native player-point protection.
       if ($allowed !== ATTACK_ALLOWED && $allowed !== ATTACK_NOOB) {
         db_mysql::db_transaction_rollback();
         return $lang['fl_attack_error'][$allowed];
       }
 
       $travel = flt_travel_data($user, $source, $target, $fleet, 10, [], \Universe::getBaseGalaxyDistance());
-      if ($travel['fleet_speed'] <= 0 || $travel['duration'] < 1
-        || $travel['consumption'] > $travel['capacity']
-        || mrc_get_level($user, $source, RES_DEUTERIUM) < $travel['consumption']) {
+      if ($travel['duration'] < 1) {
         db_mysql::db_transaction_rollback();
         return $lang['gs_c13'];
       }

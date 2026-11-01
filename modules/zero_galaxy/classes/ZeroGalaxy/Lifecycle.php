@@ -12,9 +12,6 @@ class Lifecycle {
     'eisplanet06',
   ];
 
-  /**
-   * Settings contain normalized, positive inclusive duration ranges.
-   */
   public static function create(int $now, array $settings): array {
     $opensAt = $now + random_int($settings['energy_seconds'][0], $settings['energy_seconds'][1]);
     $unstableAt = $opensAt + random_int($settings['active_seconds'][0], $settings['active_seconds'][1]);

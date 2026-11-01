@@ -178,7 +178,7 @@ class AcsService {
         || (int) $fleet['fleet_end_system'] !== (int) $current['system'] || (int) $fleet['fleet_end_planet'] !== (int) $current['position']
         || (int) $fleet['fleet_start_time'] <= SN_TIME_NOW || !in_array((int) $fleet['fleet_mission'], [MT_ATTACK, MT_AKS], true)) { self::fail(); }
       $limit = AttackPolicy::limit($current);
-      if ($limit === null || AttackPolicy::cost(sys_unit_str2arr($fleet['fleet_array'])) > $limit) { self::fail(); }
+      if ($limit === null) { self::fail(); }
       $groupId = (int) $fleet['fleet_group'];
       if (!$groupId) {
         DbFleetStatic::dbAcsInsert($userId, $fleetId, $fleet);
@@ -193,8 +193,7 @@ class AcsService {
         $members = array_unique(explode(',', $context['group']['eingeladen']));
         if (self::invited($context['group'], (int) $invite['id'])) { self::fail('zero_galaxy_acs_already_invited'); }
         if (count($members) >= 5) { self::fail('zero_galaxy_acs_full'); }
-        $invited = SN::$db->db_escape(implode(',', $members) . ',' . (int) $invite['id']);
-        self::query("UPDATE {{aks}} SET eingeladen='{$invited}' WHERE id={$groupId}");
+        DbFleetStatic::dbAcsAddUserByFleetId((int) $invite['id'], $fleetId);
       }
       db_mysql::db_transaction_commit();
     } catch (Throwable $error) { db_mysql::db_transaction_rollback(); throw $error; }

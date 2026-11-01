@@ -13,7 +13,6 @@ class AdminView {
       && preg_match('~(?:^|/)admin/userlist\.tpl\.html$~D', str_replace('\\', '/', $template->files['userlist'])) === 1;
   }
 
-  /** Native online overview and full player list share this presentation. */
   public static function filter($template, mysqli $db, string $prefix): void {
     if (!self::appliesTo($template) || !empty($template->_rootref['ZERO_GALAXY_ADMIN_FILTERED'])) {
       return;

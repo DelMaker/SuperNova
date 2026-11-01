@@ -10,8 +10,24 @@ use RuntimeException;
 use SN;
 use Throwable;
 
-/** Shared native operations; callers retain their lifecycle locks and transaction. */
 class NativeDispatch {
+  public static function lockTarget(array $user, array $rift, int $legacyOwnerId, int $sourceId,
+    array $additionalOwners = []): ?array {
+    $ownerId = RiftTarget::ownerId($rift, $legacyOwnerId);
+    $targetId = (int) $rift['planet_id'];
+    SN::$gc->db->lockRecords([
+      'users' => array_values(array_unique(array_merge([(int) $user['id'], $ownerId], $additionalOwners))),
+      'planets' => [$sourceId, $targetId],
+    ]);
+    $user = db_user_by_id($user['id'], true);
+    $source = DBStaticPlanet::db_planet_by_id($sourceId, true);
+    $target = DBStaticPlanet::db_planet_by_id($targetId, true);
+    $npc = db_user_by_id($ownerId, true);
+    return $source && (int) $source['id_owner'] === (int) $user['id']
+      && RiftTarget::matches($rift, $target, $npc, $legacyOwnerId, SN_TIME_NOW)
+      ? [$user, $source, $target] : null;
+  }
+
   public static function allowed(array $user, array $source, array $target, array $ships, int $mission, int $speed): int {
     // Native fuel validation uses the same one-galaxy distance as our travel
     // calculation. Never persist these temporary source coordinates.
@@ -25,12 +41,9 @@ class NativeDispatch {
   }
 
   public static function launch(array $user, array $source, array $target, array $ships, int $mission, array $travel,
-    int $targetType = PT_PLANET, int $groupId = 0, int $groupArrival = 0): array {
+    int $groupId = 0, int $groupArrival = 0): array {
     if (!db_mysql::$db_in_transaction || !SN::$db->transactionCheck()) {
       throw new RuntimeException('Zero Galaxy dispatch requires the caller transaction');
-    }
-    if ($targetType !== ($mission === MT_RECYCLE ? PT_DEBRIS : PT_PLANET)) {
-      throw new RuntimeException('Zero Galaxy dispatch target type does not match its mission');
     }
     $naturalArrival = SN_TIME_NOW + (int) $travel['duration'];
     if ($mission === MT_AKS ? ($groupId < 1 || $groupArrival < $naturalArrival)
@@ -47,7 +60,7 @@ class NativeDispatch {
       'fleet_start_planet' => (int) $source['planet'], 'fleet_start_type' => (int) $source['planet_type'],
       'fleet_end_time' => $returnAt, 'fleet_end_planet_id' => (int) $target['id'],
       'fleet_end_galaxy' => 0, 'fleet_end_system' => (int) $target['system'],
-      'fleet_end_planet' => (int) $target['planet'], 'fleet_end_type' => $targetType,
+      'fleet_end_planet' => (int) $target['planet'], 'fleet_end_type' => $mission === MT_RECYCLE ? PT_DEBRIS : PT_PLANET,
       'fleet_target_owner' => (int) $target['id_owner'], 'fleet_group' => $groupId, 'start_time' => SN_TIME_NOW,
     ]);
     if (!$fleetId) { throw new RuntimeException('Zero Galaxy fleet was not created'); }

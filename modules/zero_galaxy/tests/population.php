@@ -37,11 +37,7 @@ $prefix = 'zg_pop_' . bin2hex(random_bytes(5)) . '_';
 $sourcePrefix = SN::$db->db_prefix;
 if (!preg_match('/^[a-zA-Z0-9_]*$/D', $sourcePrefix)) { throw new RuntimeException('Invalid source database prefix'); }
 $tables = ['zero_galaxy_rifts', 'zero_galaxy_state', 'zero_galaxy_npcs', 'fleets', 'unit', 'planets', 'users'];
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $one = function (string $sql) use ($db): ?array { return $db->query($sql)->fetch_assoc(); };
 $scalar = function (string $sql) use ($db) { return $db->query($sql)->fetch_row()[0]; };
 $rows = function (string $sql) use ($db): array { return $db->query($sql)->fetch_all(MYSQLI_ASSOC); };

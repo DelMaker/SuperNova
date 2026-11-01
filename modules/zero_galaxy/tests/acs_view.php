@@ -24,10 +24,7 @@ class AcsFixtureModule {
     return $template;
   }
 }
-$assertions = 0;
-$check = function ($condition, string $message) use (&$assertions) {
-  $assertions++; if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $fixture = function (string $name): AcsFixtureTemplate {
   $template = new AcsFixtureTemplate(); $template->_rootref = &$template->_tpldata['.'][0];
   $template->files[$name] = SN_ROOT_PHYSICAL . 'design/templates/OpenGame/' . $name . '.tpl.html';

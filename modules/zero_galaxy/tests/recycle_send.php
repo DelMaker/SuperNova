@@ -31,11 +31,7 @@ $db = SN::$db->link;
 $original = [SN::$db, SN::$db->db_prefix, SN::$sys_user_logged_in, $user, $planetrow];
 $prefix = 'zg_rcsend_' . bin2hex(random_bytes(5)) . '_';
 $tables = ['zero_galaxy_npcs', 'zero_galaxy_rifts', 'zero_galaxy_state', 'fleets', 'unit', 'planets', 'users'];
-$assertions = 0;
-$check = function ($condition, string $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $one = function (string $sql) use ($db): ?array { return $db->query($sql)->fetch_assoc(); };
 $scalar = function (string $sql) use ($db) { return $db->query($sql)->fetch_row()[0]; };
 $rows = function (string $sql) use ($db): array { return $db->query($sql)->fetch_all(MYSQLI_ASSOC); };

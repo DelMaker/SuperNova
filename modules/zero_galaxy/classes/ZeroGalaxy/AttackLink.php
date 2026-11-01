@@ -2,7 +2,6 @@
 
 namespace ZeroGalaxy;
 
-/** Recognize the native attack URL used by existing espionage reports. */
 class AttackLink {
   public static function nativeCoordinates(string $page, string $method, array $parameters,
     int $maxSystem, int $maxPlanet): ?array {

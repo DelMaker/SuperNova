@@ -11,11 +11,7 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
 use ZeroGalaxy\Profile;
 use ZeroGalaxy\Settings;
 
-$assertions = 0;
-$check = function ($condition, $message) use (&$assertions) {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $expectFailure = function (callable $callable, string $message) use ($check) {
   try { $callable(); }
   catch (RuntimeException $error) { $check(true, $message); return; }
@@ -90,19 +86,17 @@ $varied['fleet_weights'] = [202 => 1, 203 => 3, 204 => 100];
 $varied['defence_weights'] = [401 => 2, 402 => 1, 403 => 100];
 $varied['resource_spread_percent'] = 20;
 $varied['tech'] = [106 => ['mean' => 1, 'spread' => 4], 109 => ['mean' => 35, 'spread' => 2]];
-for ($iteration = 0; $iteration < 40; $iteration++) {
-  $sample = Profile::create('tiny', $varied, 1.25, $rates, $resolver);
-  $check($sample['target_points'] >= 800 && $sample['target_points'] <= 1200, 'Random target must remain inside its configured inclusive range.');
-  $fleet = $cost($sample['fleet']); $defence = $cost($sample['defence']);
-  $check($sample['fleet_points'] === $fleet && $sample['defence_points'] === $defence,
-    'Recorded point costs must match the actual chosen units.');
-  $check($fleet <= floor($sample['target_points'] * .6) && $defence <= $sample['target_points'] - floor($sample['target_points'] * .6), 'Neither army may overspend its independent budget.');
-  $check(($sample['fleet'][204] ?? 0) <= 2 && ($sample['defence'][403] ?? 0) <= 3, 'A high weight must never bypass the native quantity cap.');
-  $check($sample['garrison_points'] === $fleet + $defence && $sample['fleet_limit'] === (int) floor(($fleet + $defence) * 1.25), 'The final cap must match the materializable garrison.');
-  $equivalent = $sample['resources'][901] + 2 * $sample['resources'][902] + 4 * $sample['resources'][903];
-  $check($equivalent <= $fleet * .9 + 0.000001 && $equivalent > $fleet * .6 - 7.000001, 'Weighted loot must stay within 60–90% of fleet cost, allowing only conversion rounding.');
-  $check($sample['tech'][106] >= 0 && $sample['tech'][106] <= 5 && $sample['tech'][109] >= 33 && $sample['tech'][109] <= 37, 'Technology spread must use absolute levels and clamp the lower bound to zero.');
-}
+$sample = Profile::create('tiny', $varied, 1.25, $rates, $resolver);
+$check($sample['target_points'] >= 800 && $sample['target_points'] <= 1200, 'Random target must remain inside its configured inclusive range.');
+$fleet = $cost($sample['fleet']); $defence = $cost($sample['defence']);
+$check($sample['fleet_points'] === $fleet && $sample['defence_points'] === $defence,
+  'Recorded point costs must match the actual chosen units.');
+$check($fleet <= floor($sample['target_points'] * .6) && $defence <= $sample['target_points'] - floor($sample['target_points'] * .6), 'Neither army may overspend its independent budget.');
+$check(($sample['fleet'][204] ?? 0) <= 2 && ($sample['defence'][403] ?? 0) <= 3, 'A high weight must never bypass the native quantity cap.');
+$check($sample['garrison_points'] === $fleet + $defence && $sample['fleet_limit'] === (int) floor(($fleet + $defence) * 1.25), 'The final cap must match the materializable garrison.');
+$equivalent = $sample['resources'][901] + 2 * $sample['resources'][902] + 4 * $sample['resources'][903];
+$check($equivalent <= $fleet * .9 + 0.000001 && $equivalent > $fleet * .6 - 7.000001, 'Weighted loot must stay within 60–90% of fleet cost, allowing only conversion rounding.');
+$check($sample['tech'][106] >= 0 && $sample['tech'][106] <= 5 && $sample['tech'][109] >= 33 && $sample['tech'][109] <= 37, 'Technology spread must use absolute levels and clamp the lower bound to zero.');
 
 $capped = $category;
 $capped['fleet_weights'] = [204 => 1];

@@ -12,11 +12,7 @@ $rift = ['rift_id' => 1, 'npc_owner_id' => 20, 'planet_id' => 30, 'system' => 10
   'born_at' => 100, 'opens_at' => 200, 'unstable_at' => 300, 'closes_at' => 400, 'disappears_at' => 500];
 $planet = ['id' => 30, 'id_owner' => 20, 'galaxy' => 0, 'system' => 10, 'planet' => 5, 'planet_type' => PT_PLANET];
 $owner = ['id' => 20, 'user_bot' => 200, 'authlevel' => 0, 'parent_account_id' => 0, 'parent_account_global' => 0];
-$assertions = 0;
-$check = function ($condition, string $message) use (&$assertions): void {
-  $assertions++;
-  if (!$condition) { throw new RuntimeException($message); }
-};
+require __DIR__ . '/support/assertions.php';
 $before = [$rift, $planet, $owner];
 foreach ([99 => false, 100 => false, 199 => false, 200 => true, 299 => true, 300 => true,
   399 => true, 400 => false, 499 => false, 500 => false] as $now => $eligible) {
