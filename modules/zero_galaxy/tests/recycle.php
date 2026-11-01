@@ -19,6 +19,7 @@ foreach (['ARRIVE', 'ACCOMPLISH', 'RETURN'] as $event) { define('EVENT_FLT_' . $
 foreach (['NONE' => 0, 'ATTACK' => 1, 'AKS' => 2, 'TRANSPORT' => 3, 'RELOCATE' => 4,
   'HOLD' => 5, 'SPY' => 6, 'COLONIZE' => 7, 'RECYCLE' => 8, 'DESTROY' => 9,
   'MISSILE' => 10, 'EXPLORE' => 15] as $name => $value) { define('MT_' . $name, $value); }
+require_once __DIR__ . '/support/autoload.php';
 require_once SN_ROOT_PHYSICAL . 'classes/Fleet/FleetDispatchEvent.php';
 require_once SN_ROOT_PHYSICAL . 'classes/Fleet/DbFleetStatic.php';
 require_once SN_ROOT_PHYSICAL . 'classes/Planet/DBStaticPlanet.php';

@@ -139,14 +139,14 @@ class RiftAttackEvent extends RiftMissionEvent {
       && (int) $group['planet_type'] === PT_PLANET;
     $eligible = [];
     $invited = array_map('intval', explode(',', (string) $group['eingeladen']));
-    $allowed = $allowed && count(array_unique($invited)) <= 5;
+    $allowed = $allowed && count(array_unique($invited)) <= AcsPolicy::MAX_PLAYERS;
     foreach ($this->groupFleets as $member) {
       if (!$allowed || !in_array((int) $member['fleet_owner'], $invited, true)
         || !AcsPolicy::validMember($member, $this->lockedRift ?? [], $groupId, (int) $group['ankunft'])) {
         $this->detach($member, (int) $member['fleet_end_galaxy'] === 0);
       } else { $eligible[] = $member; }
     }
-    if (count($eligible) > 5) {
+    if (count($eligible) > AcsPolicy::MAX_FLEETS) {
       foreach ($eligible as $member) { $this->detach($member, true); }
       $eligible = [];
     }

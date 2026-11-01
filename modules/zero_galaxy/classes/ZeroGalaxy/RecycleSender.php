@@ -2,18 +2,15 @@
 
 namespace ZeroGalaxy;
 
-use DBAL\db_mysql;
 use SN;
 use Throwable;
 
 class RecycleSender {
   public static function send(Storage $storage, array $settings): string {
     global $user, $planetrow, $lang;
-
     lng_include('universe');
     lng_include('fleet');
     require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
-
     $system = self::integer('system');
     $position = self::integer('planet');
     $riftId = self::integer('rift_id');
@@ -26,80 +23,24 @@ class RecycleSender {
       || $position === null || $position < 1 || $position > (int) SN::$config->game_maxPlanet) {
       return $lang['zero_galaxy_recycle_bad_request'];
     }
-    $prefix = SN::$db->db_prefix;
-    if (db_mysql::$db_in_transaction || SN::$db->transactionCheck()
-      || !preg_match('/^[a-zA-Z0-9_]*$/D', $prefix)) {
-      return $lang['zero_galaxy_recycle_failed'];
-    }
-
-    db_mysql::db_transaction_start();
     try {
-      $state = SN::$db->doquery("SELECT * FROM `{$prefix}zero_galaxy_state` WHERE id = 1 FOR UPDATE", true);
-      $rift = SN::$db->doquery("SELECT * FROM `{$prefix}zero_galaxy_rifts`
-        WHERE system = {$system} AND position = {$position} FOR UPDATE", true);
-      if (!$state || !$rift || (int) $rift['rift_id'] !== $riftId || empty($rift['planet_id'])
-        || !in_array(Lifecycle::phase($rift, SN_TIME_NOW), ['active', 'unstable'], true)) {
-        return self::rollback($lang['zero_galaxy_recycle_missing']);
-      }
-      $sourceId = (int) $user['current_planet'];
-      $locked = NativeDispatch::lockTarget($user, $rift, (int) $state['npc_owner_id'], $sourceId);
-      if (!$locked) { return self::rollback($lang['zero_galaxy_recycle_missing']); }
-      [$user, $source, $target] = $locked;
-      $debris = (float) $target['debris_metal'] + (float) $target['debris_crystal'];
-      if (!is_finite($debris) || $debris <= 0) {
-        return self::rollback($lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
-      }
-
-      $from = $source;
-      $from['galaxy'] = 1;
-      $available = [];
-      $owned = 0;
-      foreach (sn_get_groups('flt_recyclers') as $id) {
-        $count = max(0, (int) mrc_get_level($user, $source, $id, false, true));
-        $owned += $count;
-        $single = flt_travel_data($user, $from, $target, [$id => 1], 10);
-        if ($count > 0 && $single['fleet_speed'] > 0 && $single['hold'] > 0 && $single['consumption'] > 0) {
-          $available[$id] = $count;
-        }
-      }
-      if (!$available) {
-        return self::rollback($lang['fl_attack_error'][$owned ? ATTACK_TOO_FAR : ATTACK_NO_RECYCLERS]);
-      }
-      $selection = flt_calculate_fleet_to_transport($available, $debris, $from, $target);
-      $fleet = array_map('intval', $selection['fleet']);
-      if (!$fleet || min($fleet) < 1) {
-        return self::rollback($lang['fl_attack_error'][ATTACK_NO_FUEL]);
-      }
-      $allowed = NativeDispatch::allowed($user, $source, $target, $fleet, MT_RECYCLE, 10);
-      if ($allowed !== ATTACK_ALLOWED) {
-        return self::rollback($lang['fl_attack_error'][$allowed]);
-      }
-      $travel = flt_travel_data($user, $source, $target, $fleet, 10, [], \Universe::getBaseGalaxyDistance());
-      if ($travel['duration'] < 1) {
-        return self::rollback($lang['gs_c13']);
-      }
-      NativeDispatch::launch($user, $source, $target, $fleet, MT_RECYCLE, $travel);
-      $remaining = $owned - array_sum($fleet);
-      db_mysql::db_transaction_commit();
+      $result = (new FleetDispatchService(new NativeDispatch()))->send(new DispatchContext($user, $settings, SN_TIME_NOW),
+        DispatchRequest::recycle($system, $position, $riftId));
+    } catch (DispatchFailure $error) {
+      return $error->translate($lang);
     } catch (Throwable $error) {
-      if (db_mysql::$db_in_transaction) { db_mysql::db_transaction_rollback(); }
       error_log('Zero Galaxy recycling: ' . $error->getMessage());
       return $lang['zero_galaxy_recycle_failed'];
     }
-    $planetrow = NativeDispatch::refreshSource($source, (int) $travel['consumption']);
+    $planetrow = $result->refreshedSource;
     $ships = [];
-    foreach ($fleet as $id => $count) { $ships[] = $count . ' ' . $lang['tech'][$id]; }
+    foreach ($result->fleet as $id => $count) { $ships[] = $count . ' ' . $lang['tech'][$id]; }
     return $lang['gs_sending'] . ' ' . implode(', ', $ships) . ' ' . $lang['gs_to']
-      . " 0:{$system}:{$position}|flt_recyclers={$remaining}";
+      . " 0:{$system}:{$position}|flt_recyclers={$result->remaining}";
   }
 
   private static function integer(string $name): ?int {
     $value = isset($_POST[$name]) && is_scalar($_POST[$name]) ? filter_var($_POST[$name], FILTER_VALIDATE_INT) : false;
     return $value === false ? null : $value;
-  }
-
-  private static function rollback(string $message): string {
-    db_mysql::db_transaction_rollback();
-    return $message;
   }
 }

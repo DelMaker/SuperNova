@@ -14,6 +14,7 @@ $_GET = $_POST = $_COOKIE = $_REQUEST = [];
 define('IN_AJAX', true);
 $allow_anonymous = true;
 require getcwd() . '/common.php';
+require_once __DIR__ . '/support/autoload.php';
 require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
 foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'NativeDispatch', 'RecycleSender'] as $class) {
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';

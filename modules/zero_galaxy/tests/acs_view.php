@@ -4,6 +4,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 define('INSIDE', true);
 define('SN_ROOT_PHYSICAL', dirname(__DIR__, 3) . '/');
 define('SN_ROOT_RELATIVE', '');
+require_once __DIR__ . '/support/autoload.php';
 require_once SN_ROOT_PHYSICAL . 'classes/template_compile.php';
 require_once SN_ROOT_PHYSICAL . 'classes/template.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AcsView.php';

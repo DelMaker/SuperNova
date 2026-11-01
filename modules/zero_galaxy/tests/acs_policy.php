@@ -8,6 +8,7 @@ function sn_get_groups($group) {
   if ($group !== 'fleet') { throw new RuntimeException('Unexpected test group'); }
   return [202 => 202, 203 => 203, 204 => 204];
 }
+require_once __DIR__ . '/support/autoload.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AttackPolicy.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AcsPolicy.php';
 

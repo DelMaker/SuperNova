@@ -95,6 +95,8 @@ namespace {
     }
   }
 
+  require_once __DIR__ . '/support/autoload.php';
+
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AttackLink.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftFleetDispatcher.php';
   require_once dirname(__DIR__) . '/zero_galaxy.php';

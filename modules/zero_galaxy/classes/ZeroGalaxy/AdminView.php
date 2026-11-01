@@ -9,12 +9,11 @@ use RuntimeException;
 class AdminView {
   public static function appliesTo($template): bool {
     return defined('IN_ADMIN') && IN_ADMIN === true && is_object($template)
-      && isset($template->files['userlist']) && is_string($template->files['userlist'])
-      && preg_match('~(?:^|/)admin/userlist\.tpl\.html$~D', str_replace('\\', '/', $template->files['userlist'])) === 1;
+      && (new NativeTemplateAdapter($template))->isNative('userlist', 'admin/');
   }
 
   public static function filter($template, mysqli $db, string $prefix): void {
-    if (!self::appliesTo($template) || !empty($template->_rootref['ZERO_GALAXY_ADMIN_FILTERED'])) {
+    if (!self::appliesTo($template) || (new NativeTemplateAdapter($template))->value('ZERO_GALAXY_ADMIN_FILTERED')) {
       return;
     }
     if (!preg_match('/^[a-zA-Z0-9_]*$/D', $prefix) || strlen($prefix) > 40) {
@@ -38,18 +37,17 @@ class AdminView {
         $ipCounts[$ip] = ($ipCounts[$ip] ?? 0) + 1;
       }
     }
-    $rows = $template->_tpldata['user'] ?? [];
-    $template->_tpldata['user'] = [];
-    foreach ($rows as $row) {
+    $adapter = new NativeTemplateAdapter($template);
+    $visible = [];
+    foreach ($adapter->rows('user') as $row) {
       if (isset($hidden[(int) ($row['ID'] ?? 0)])) {
         continue;
       }
       $duplicates = (int) ($row['IP_MULTI'] ?? 0) - ($ipCounts[strtolower((string) ($row['IP'] ?? ''))] ?? 0);
       $row['IP_MULTI'] = $duplicates > 1 ? $duplicates : 0;
-      unset($row['S_ROW_COUNT'], $row['S_FIRST_ROW'], $row['S_LAST_ROW']);
-      $template->assign_block_vars('user', $row);
+      $visible[] = $row;
     }
-    $template->assign_var('USER_COUNT', count($template->_tpldata['user']));
+    $template->assign_var('USER_COUNT', $adapter->replaceRows('user', $visible));
     $template->assign_var('ZERO_GALAXY_ADMIN_FILTERED', true);
   }
 }

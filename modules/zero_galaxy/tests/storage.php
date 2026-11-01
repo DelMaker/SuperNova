@@ -5,6 +5,7 @@ if (PHP_SAPI !== 'cli') {
   exit;
 }
 
+require __DIR__ . '/support/autoload.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';

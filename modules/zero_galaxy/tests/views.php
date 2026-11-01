@@ -6,6 +6,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 define('INSIDE', true);
+require __DIR__ . '/support/autoload.php';
 define('SN_ROOT_PHYSICAL', dirname(__DIR__, 3) . '/');
 define('SN_ROOT_RELATIVE', '');
 define('MT_ATTACK', 1);
@@ -67,10 +68,9 @@ $lang = array_fill_keys(['zero_galaxy_fleet_limit', 'zero_galaxy_attack_selected
 $rift = ['rift_id' => 543, 'system' => 18, 'position' => 6, 'config_snapshot' => json_encode([
   'profile' => ['version' => 1, 'fleet_limit' => 1000, 'category' => ['name' => 'Custom', 'color' => '#7B2CBF']],
 ])];
-$payloadMethod = new ReflectionMethod(ZeroGalaxy\AttackView::class, 'payload');
-$payloadMethod->setAccessible(true);
+$payloadMethod = [ZeroGalaxy\NativeFleetWizard::class, 'payload'];
 $ships = [210 => 9007199254740993];
-$payload = $payloadMethod->invoke(null, $rift, 1, $ships, $names[1], 42, 1700000000);
+$payload = $payloadMethod($rift, 1, $ships, $names[1], 42, 1700000000);
 $check($payload['targetName'] === $names[1], 'JSON/banner target name must remain raw');
 $check($payload['fixedFleet'] === [210 => '9007199254740993'], 'Fixed fleet counts must preserve every digit across JSON');
 $decoded = json_decode(json_encode($payload), true);
@@ -79,7 +79,7 @@ $check($decoded['fixedFleet'][210] === '9007199254740993' && $ships[210] === 900
 $group = ['group' => ['id' => 91, 'name' => 'Joint attack', 'ankunft' => 1700000300],
   'fleets' => [['fleet_owner' => 7, 'fleet_array' => '210,9007199254740993;'],
     ['fleet_owner' => 8, 'fleet_array' => '210,600;']]];
-$joint = $payloadMethod->invoke(null, $rift, 0, [], $names[0], 42, 1700000000, $group);
+$joint = $payloadMethod($rift, 0, [], $names[0], 42, 1700000000, $group);
 $check($joint['mission'] === MT_AKS && $joint['groupId'] === 91 && $joint['fields']['acs_group'] === 91,
   'A joint wizard must retain its native mission and module group context');
 $check($joint['existingFleet'] === [210 => '9007199254740993'],
@@ -88,7 +88,7 @@ $check(ZeroGalaxy\AcsService::validToken($joint['fields']['acs_token'], 7, 42, 5
   'The joint payload must contain a valid signature bound to its source, rift and group');
 $check($joint['groupArrival'] === 1700000300 && $joint['serverTimeZone'] === date_default_timezone_get(),
   'The ACS preview must expose its shared arrival and actual server time zone');
-$sent = $payloadMethod->invoke(null, $rift, 3, [210 => 3], $names[0], 42, 1700000000,
+$sent = $payloadMethod($rift, 3, [210 => 3], $names[0], 42, 1700000000,
   ['group' => $group['group'], 'fleets' => [['fleet_owner' => 7, 'fleet_array' => '210,2;']]]);
 $check($sent['existingFleet'] === [210 => '2'] && $sent['fixedFleet'] === [210 => '3'],
   'The sent-step preview must retain the pre-launch ACS snapshot and add the new fleet exactly once');

@@ -17,6 +17,7 @@ $_GET = $_POST = $_COOKIE = $_REQUEST = [];
 define('IN_AJAX', true);
 $allow_anonymous = true;
 require getcwd() . '/common.php';
+require_once __DIR__ . '/support/autoload.php';
 foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'AcsPolicy', 'AcsService', 'NativeDispatch', 'AttackSender', 'SpySender'] as $class) {
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';
 }
@@ -436,9 +437,8 @@ try {
   $leader = $send([SHIP_SMALL_FIGHTER_LIGHT => 6], 1, 0, $sourceId);
   $leaderId = (int) $leader['fleet_id'];
   $leaderRow = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id={$leaderId}");
-  $manage = new ReflectionMethod(\ZeroGalaxy\AcsService::class, 'manage');
-  $manage->setAccessible(true);
-  $manage->invoke(null, $leaderRow, $rift, array_replace($settings, ['acs_enabled' => true]), '');
+  $acsApplication = \ZeroGalaxy\AcsService::application(array_replace($settings, ['acs_enabled' => true]));
+  $acsApplication->manage($leaderRow, $rift, $actorId, '');
   $group = \Fleet\DbFleetStatic::dbAcsGetByFleet($leaderId);
   $groupId = (int) $group['id'];
   $check($groupId > 0 && (int) $scalar("SELECT fleet_mission FROM {$prefix}fleets WHERE fleet_id={$leaderId}") === MT_AKS,
@@ -470,8 +470,8 @@ try {
   $check((int) $member['fleet_start_time'] === (int) $group['ankunft']
     && (int) $member['fleet_end_time'] === (int) $group['ankunft'] + (int) $atLimit['travel']['duration'],
     'Joining a slower ACS must synchronize arrival and preserve the member own return duration.');
-  $rejected(function () use ($manage, $member, $rift, $settings) {
-    $manage->invoke(null, $member, $rift, $settings, '');
+  $rejected(function () use ($acsApplication, $member, $rift, $actorId) {
+    $acsApplication->manage($member, $rift, $actorId, '');
   }, 'An ordinary group member must not manage the leader invitations');
   $rejected(function () use ($join) { $join(1); }, 'Multiple own fleets must share the same player cap', AttackPolicy::OVER_LIMIT);
   $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId},{$otherId}' WHERE id={$groupId}");

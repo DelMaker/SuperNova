@@ -16,6 +16,7 @@ use ZeroGalaxy\AdminView;
 use ZeroGalaxy\AcsPolicy;
 use ZeroGalaxy\AcsService;
 use ZeroGalaxy\AcsView;
+use ZeroGalaxy\NativeTemplateAdapter;
 
 class zero_galaxy extends sn_module {
   public $versionCommitted = '';
@@ -26,7 +27,7 @@ class zero_galaxy extends sn_module {
   public function __construct($filename = __FILE__) {
     $this->manifest['package'] = 'universe';
     $this->manifest['name'] = 'zero_galaxy';
-    $this->manifest['version'] = '0.6.0';
+    $this->manifest['version'] = '0.7.0';
     $this->manifest['mvc']['model'][''] = ['callable' => 'route'];
     $this->manifest['mvc']['view']['zero_galaxy'] = ['callable' => 'render'];
     $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
@@ -292,14 +293,14 @@ class zero_galaxy extends sn_module {
   }
 
   public function decorateAttack($template = null) {
-    if (INITIAL_PAGE !== 'zero_galaxy_attack' || !is_object($template)
-      || !isset($template->_rootref['ZERO_ATTACK_STEP']) || !empty($template->_rootref['ZERO_ATTACK_WRAPPED'])
-      || !array_intersect(array_keys($template->files), ['fleet0', 'fleet1', 'fleet2', 'fleet3'])) {
+    if (INITIAL_PAGE !== 'zero_galaxy_attack' || !is_object($template)) {
       return $template;
     }
+    $adapter = new NativeTemplateAdapter($template);
+    if ($adapter->value('ZERO_ATTACK_STEP') === null || $adapter->value('ZERO_ATTACK_WRAPPED')
+      || !$adapter->hasHandle(['fleet0', 'fleet1', 'fleet2', 'fleet3'])) { return $template; }
     AttackView::escapeFleetNames($template);
-    $template->_rootref['ZERO_ATTACK_WRAPPED'] = true;
-    $template->files = $template->filename = $template->files_inherit = [];
-    return $this->addModuleTemplate('zero_galaxy_attack', $template);
+    $template->assign_var('ZERO_ATTACK_WRAPPED', true);
+    return $adapter->wrap($this, 'zero_galaxy_attack');
   }
 }

@@ -6,6 +6,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 define('INSIDE', true);
+require __DIR__ . '/support/autoload.php';
 define('SN_ROOT_PHYSICAL', dirname(__DIR__, 3) . '/');
 define('SN_ROOT_RELATIVE', '');
 define('SN_TIME_NOW', 1700000000);

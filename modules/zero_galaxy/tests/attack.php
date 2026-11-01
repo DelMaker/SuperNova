@@ -28,6 +28,7 @@ namespace {
   foreach (['NONE' => 0, 'ATTACK' => 1, 'AKS' => 2, 'TRANSPORT' => 3, 'RELOCATE' => 4,
     'HOLD' => 5, 'SPY' => 6, 'COLONIZE' => 7, 'RECYCLE' => 8, 'DESTROY' => 9,
     'MISSILE' => 10, 'EXPLORE' => 15] as $name => $value) { define('MT_' . $name, $value); }
+  require_once __DIR__ . '/support/autoload.php';
   require_once $root . 'includes/constants/constants_units.php';
   require_once $root . 'includes/constants/constants_ube.php';
   require_once $root . 'classes/Fleet/FleetDispatchEvent.php';

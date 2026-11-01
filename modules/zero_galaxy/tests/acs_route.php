@@ -18,6 +18,7 @@ namespace {
   define('SN_ROOT_RELATIVE', '/');
   define('SN_ROOT_VIRTUAL', 'http://localhost:8080/');
   define('SN_TIME_NOW', 1700000000);
+  require_once __DIR__ . '/support/autoload.php';
   require_once dirname(__DIR__, 3) . '/includes/general/general_params.php';
   require_once dirname(__DIR__, 3) . '/includes/general/general_validators.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Settings.php';

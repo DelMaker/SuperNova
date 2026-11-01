@@ -6,8 +6,25 @@ use InvalidArgumentException;
 
 /** Pure checks shared by ACS previews, launch validation and arrivals. */
 class AcsPolicy {
+  const MAX_PLAYERS = 5;
+  const MAX_FLEETS = 5;
+
   public static function enabled(array $settings): bool {
     return ($settings['acs_enabled'] ?? false) === true;
+  }
+
+  public static function invited(array $group, int $userId): bool {
+    return in_array((string) $userId, explode(',', (string) ($group['eingeladen'] ?? '')), true);
+  }
+
+  public static function manageableFleet(?array $fleet, ?array $rift, int $userId, int $now): bool {
+    return $fleet && $rift && (int) $fleet['fleet_owner'] === $userId
+      && (int) $fleet['fleet_mess'] === FLEET_STATUS_FLYING
+      && (int) $fleet['fleet_end_galaxy'] === 0 && (int) $fleet['fleet_end_type'] === PT_PLANET
+      && (int) $fleet['fleet_end_system'] === (int) $rift['system']
+      && (int) $fleet['fleet_end_planet'] === (int) $rift['position']
+      && (int) $fleet['fleet_start_time'] > $now
+      && in_array((int) $fleet['fleet_mission'], [MT_ATTACK, MT_AKS], true);
   }
 
   /** Pass one group's current rows; a player's several fleets share one cap. */

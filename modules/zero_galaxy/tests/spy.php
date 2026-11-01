@@ -18,6 +18,7 @@ foreach (['NONE' => 0, 'ATTACK' => 1, 'AKS' => 2, 'TRANSPORT' => 3, 'RELOCATE' =
   'MISSILE' => 10, 'EXPLORE' => 15] as $name => $value) {
   define('MT_' . $name, $value);
 }
+require_once __DIR__ . '/support/autoload.php';
 require_once $root . 'includes/constants/constants_units.php';
 require_once $root . 'classes/Common/Traits/TJsonSerializable.php';
 require_once $root . 'classes/Fleet/MissionData.php';
