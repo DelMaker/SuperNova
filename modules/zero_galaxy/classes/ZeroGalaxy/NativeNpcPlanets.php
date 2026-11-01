@@ -138,6 +138,10 @@ class NativeNpcPlanets implements WorldBodies {
   }
 
   public function removeUnusedOwners(): void {
+    // Lock owners before inventory, including reads inside the filtering subquery.
+    $this->records->query("SELECT u.id FROM {$this->users} u JOIN {$this->npcs} n ON n.owner_id = u.id
+      LEFT JOIN {$this->rifts} r ON r.rift_id = n.rift_id
+      WHERE r.rift_id IS NULL ORDER BY u.id FOR UPDATE");
     // External grants may add player inventory; preserve it and defer retirement.
     $rows = $this->records->query("SELECT n.* FROM {$this->npcs} n LEFT JOIN {$this->rifts} r ON r.rift_id = n.rift_id
       WHERE r.rift_id IS NULL AND NOT EXISTS (SELECT 1 FROM {$this->units} u
