@@ -138,8 +138,12 @@ class NativeNpcPlanets implements WorldBodies {
   }
 
   public function removeUnusedOwners(): void {
+    // External grants may add player inventory; preserve it and defer retirement.
     $rows = $this->records->query("SELECT n.* FROM {$this->npcs} n LEFT JOIN {$this->rifts} r ON r.rift_id = n.rift_id
-      WHERE r.rift_id IS NULL ORDER BY n.owner_id FOR UPDATE");
+      WHERE r.rift_id IS NULL AND NOT EXISTS (SELECT 1 FROM {$this->units} u
+        WHERE u.unit_player_id = n.owner_id
+          AND (u.unit_location_type <> 4 OR u.unit_location_id <> n.owner_id OR u.unit_type <> 100))
+      ORDER BY n.owner_id FOR UPDATE");
     while ($npc = $rows->fetch_assoc()) {
       $ownerId = (int) $npc['owner_id'];
       // Incoming and returning fleets still refer to their original target owner.
@@ -149,9 +153,10 @@ class NativeNpcPlanets implements WorldBodies {
         continue;
       }
       $this->verifyOwner($ownerId, (int) $npc['rift_id']);
+      // Recheck after locking the owner, in case another writer added inventory.
       if ($this->records->query("SELECT unit_id FROM {$this->units} WHERE unit_player_id = {$ownerId}
         AND (unit_location_type <> 4 OR unit_location_id <> {$ownerId} OR unit_type <> 100) LIMIT 1 FOR UPDATE")->num_rows) {
-        throw new RuntimeException('Expired Zero Galaxy NPC contains unexpected units');
+        continue;
       }
       $this->records->query("DELETE FROM {$this->units} WHERE unit_player_id = {$ownerId}
         AND unit_location_type = 4 AND unit_location_id = {$ownerId} AND unit_type = 100");

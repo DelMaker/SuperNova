@@ -248,6 +248,44 @@ try {
   $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0
     && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 0,
     'Skipping directly beyond a replacement lifetime must leave no trace or per-rift NPC leaks.');
+
+  $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at = " . ($now + 36));
+  $storage->tick($now + 36, $future, 4, 1, true);
+  $storage->tick($now + 40, $paused, 4, 1, true);
+  $retiring = $rows("SELECT rift_id,npc_owner_id FROM {$prefix}zero_galaxy_rifts ORDER BY rift_id");
+  $check(count($retiring) === 2, 'The retirement regression must use two genuine populated native rifts.');
+  $retainedOwner = (int) $retiring[0]['npc_owner_id'];
+  $ordinaryOwner = (int) $retiring[1]['npc_owner_id'];
+  $storage->tick($now + 51, $paused, 4, 1, true);
+  $db->query("INSERT INTO {$prefix}unit
+    (unit_player_id,unit_location_type,unit_location_id,unit_type,unit_snid,unit_level)
+    VALUES ({$retainedOwner},4,{$retainedOwner},1100,1101,1)");
+  $blueprintId = (int) $db->insert_id;
+  $retained = function () use ($one, $rows, $prefix, $retainedOwner): array {
+    return [$one("SELECT * FROM {$prefix}users WHERE id = {$retainedOwner}"),
+      $one("SELECT * FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$retainedOwner}"),
+      $rows("SELECT * FROM {$prefix}unit WHERE unit_player_id = {$retainedOwner} ORDER BY unit_id")];
+  };
+  $retainedBefore = $retained();
+  $scheduledBefore = (int) $scalar("SELECT next_tick_at FROM {$prefix}zero_galaxy_state WHERE id = 1");
+  $storage->tick($now + 58, $paused, 4, 1, true);
+  $check($retained() === $retainedBefore,
+    'An expired NPC with an external blueprint must retain its entire user, registry, research and blueprint rows unchanged.');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0
+    && (int) $scalar("SELECT next_tick_at FROM {$prefix}zero_galaxy_state WHERE id = 1") > $scheduledBefore,
+    'Deferred NPC retirement must not roll back rift expiration or the lifecycle schedule.');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id = {$ordinaryOwner}") === 0
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$ordinaryOwner}") === 0
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_player_id = {$ordinaryOwner}") === 0,
+    'Another expired NPC with only module-owned research must retire in the same tick.');
+  $storage->tick($now + 59, $paused, 4, 1, true);
+  $check($retained() === $retainedBefore, 'Further ticks must leave deferred external inventory and its NPC untouched.');
+  $db->query("DELETE FROM {$prefix}unit WHERE unit_id = {$blueprintId}");
+  $storage->tick($now + 60, $paused, 4, 1, true);
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id = {$retainedOwner}") === 0
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$retainedOwner}") === 0
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_player_id = {$retainedOwner}") === 0,
+    'Removing only the external test fixture must allow normal guarded retirement on a later tick.');
   echo "Population: {$assertions} assertions passed; native profiles and isolated tables checked.\n";
 } finally {
   if ((int) $scalar('SELECT @@in_transaction') !== 0) { $db->rollback(); }
