@@ -6,6 +6,7 @@ require __DIR__ . '/support/assertions.php';
 
 use ZeroGalaxy\Lifecycle;
 use ZeroGalaxy\RiftRepository;
+use ZeroGalaxy\Settings;
 use ZeroGalaxy\WorldBodies;
 use ZeroGalaxy\WorldReconciler;
 
@@ -50,9 +51,10 @@ class WorldMemoryBodies implements WorldBodies {
   public $planets = [];
   public $failMaterialize = false;
   public $cleanups = 0;
-  public function legacyOwner(array $state, int $now): int { return (int) $state['npc_owner_id']; }
-  public function riftOwner(array &$rift, array $profile, int $now): int { return (int) $rift['npc_owner_id']; }
-  public function verifyOwner(int $ownerId, int $riftId): void {}
+  public function syncOwners(array $categories, array $state, int $now): array {
+    return array_fill_keys(array_keys($categories), 17);
+  }
+  public function assignOwner(array &$rift, int $ownerId, int $legacyOwnerId): void { $rift['npc_owner_id'] = $ownerId; }
   public function planet(array $rift, int $ownerId): ?array { return $this->planets[$rift['rift_id']] ?? null; }
   public function materialize(array $rift, int $ownerId, int $now, string $phase, ?array $planet): void {
     if ($this->failMaterialize) { throw new RuntimeException('Native planet adapter failure'); }
@@ -62,10 +64,15 @@ class WorldMemoryBodies implements WorldBodies {
   public function removeUnusedOwners(): void { $this->cleanups++; }
 }
 
-$settings = ['target_active_per_system' => 1, 'tick_seconds' => 15, 'generation_seconds' => 100,
-  'energy_seconds' => [2, 2], 'active_seconds' => [3, 3], 'unstable_seconds' => [4, 4], 'closed_seconds' => [2, 2]];
+$settings = Settings::load(['target_active_per_system' => 1, 'generation_seconds' => 100]);
+$settings['categories'] = ['tiny' => $settings['categories']['tiny']];
+foreach (['energy' => 2, 'active' => 3, 'unstable' => 4, 'closed' => 2] as $phase => $seconds) {
+  $settings['categories']['tiny']['phases_hours'][$phase] = ['mean' => $seconds / 3600, 'spread_percent' => 0];
+}
 $records = new WorldMemoryRepository(); $bodies = new WorldMemoryBodies();
-$world = new WorldReconciler($records, $bodies, function () { throw new LogicException('Legacy lifecycle has no profile'); });
+$world = new WorldReconciler($records, $bodies, function (string $key, array $category): array {
+  return ['version' => 1, 'category' => ['key' => $key, 'name' => $category['name'], 'color' => $category['color']]];
+});
 $world->tick(1000, $settings, 1, 1);
 $check(count($records->rifts) === 1, 'Initial seeding must create one rift for a single guaranteed slot');
 $check($records->timeline['seeded_systems'] === 1 && $records->timeline['next_generation_at'] === 1100,
@@ -95,5 +102,10 @@ catch (RuntimeException $error) {
 }
 $check([$records->timeline, $records->rifts] === $before && $records->rollbacks === 1,
   'A native adapter failure must roll back the world transaction and its schedule');
+
+$bodies->failMaterialize = false;
+$empty = $paused; $empty['categories'] = [];
+$world->tick(1003, $empty, 1, 1, true);
+$check($records->rifts === [] && $bodies->planets === [], 'Removing the last category must remove its rifts and stop generation');
 
 echo "World reconciliation: {$assertions} assertions passed; explicit ports, no engine bootstrap or database.\n";

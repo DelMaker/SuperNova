@@ -24,7 +24,7 @@ $check($changed['refresh_seconds'] === 2, 'Refresh must not cause a tight reload
 $check(Settings::load() === $defaults, 'Overrides must not modify defaults for another request.');
 
 $keys = ['tiny', 'small', 'medium', 'large', 'huge', 'colossal', 'great'];
-$check(array_keys($defaults['categories']) === $keys, 'Exactly seven stable category keys are required.');
+$check(array_keys($defaults['categories']) === $keys, 'The default catalog must preserve its seven category keys.');
 $check(array_column($defaults['categories'], 'limit') === [-1, -1, -1, -1, 100, 10, 2], 'Global category caps must match the balance.');
 $check(array_column($defaults['categories'], 'weight') === [30.0, 25.0, 20.0, 15.0, 7.0, 2.5, 0.5], 'Default weights must preserve fractional rare categories.');
 $check($defaults['fleet_limit_multiplier'] === 1.25, 'Default fleet cap multiplier must be 125%.');
@@ -42,13 +42,15 @@ foreach ($defaults['categories'] as $key => $category) {
   $check($category['garrison_points']['mean'] > $previousPoints, 'Categories must increase in cost: ' . $key);
   $previousPoints = $category['garrison_points']['mean'];
   $check(array_keys($category['tech']) === [106, 109, 110, 111], 'Stationary NPC defaults need only four combat technologies.');
+  $check(array_values($category['tech']) === array_fill(0, 4, [8, 12, 18, 24, 30, 33, 35][array_search($key, $keys, true)]),
+    'Default static technologies must preserve the former mean levels.');
   $check($category['fleet_share_percent'] === 60.0 && $category['resource_percent'] === 75.0,
     'Fleet and resource budgets must be normalized percentages.');
 }
 
 $partial = Settings::load(['categories' => ['tiny' => [
   'garrison_points' => ['mean' => '90000000'],
-  'tech' => [106 => ['spread' => 4], 115 => ['mean' => 3]],
+  'tech' => [106 => '12', 115 => 3, 109 => 0],
   'phases_hours' => ['active' => ['mean' => 0.5]],
   'fleet_weights' => [204 => 0, 228 => 2],
   'defence_weights' => [401 => 0],
@@ -57,9 +59,7 @@ $partial = Settings::load(['categories' => ['tiny' => [
 ]]]);
 $tiny = $partial['categories']['tiny'];
 $check($tiny['garrison_points'] === ['mean' => 90000000, 'spread_percent' => 20.0], 'A partial distribution must retain its spread.');
-$check($tiny['tech'][106] === ['mean' => 8, 'spread' => 4], 'A partial technology must retain its mean.');
-$check($tiny['tech'][115] === ['mean' => 3, 'spread' => 0], 'An optional engine must default to zero absolute spread.');
-$check($tiny['tech'][109] === $defaults['categories']['tiny']['tech'][109], 'Other technologies must retain defaults.');
+$check($tiny['tech'] === [106 => 12, 115 => 3, 109 => 0], 'A technology override must replace the static map, including zero levels.');
 $check(Settings::categoryPhaseRanges($tiny)['active_seconds'] === [1440, 2160], 'One phase may override only its mean.');
 $check($tiny['phases_hours']['energy'] === $defaults['categories']['tiny']['phases_hours']['energy'], 'Other phases must retain defaults.');
 $check($tiny['fleet_weights'][204] === 0.0 && $tiny['fleet_weights'][228] === 2.0
@@ -70,6 +70,18 @@ foreach (array_slice($keys, 1) as $key) {
   $check($partial['categories'][$key] === $defaults['categories'][$key], 'A category override must not alter or denormalize its neighbors: ' . $key);
 }
 $check(Settings::load(['categories' => []]) === $defaults, 'An empty category override must retain all defaults.');
+$check(!isset(Settings::load(['categories' => ['tiny' => null]])['categories']['tiny']), 'Null must remove a configured category.');
+$check(Settings::load(['categories' => array_fill_keys($keys, null)])['categories'] === [], 'All category types may be disabled by removal.');
+$check(Settings::load(['categories' => ['tiny' => ['tech' => []]]])['categories']['tiny']['tech'] === [],
+  'An empty technology map must remove all configured research.');
+$new = $defaults['categories']['tiny'];
+$new['name'] = 'Особый';
+$new['garrison_points']['mean'] = 500;
+$new['fleet_weights'] = [204 => 1.0];
+$new['tech'] = [106 => 1000];
+$catalog = Settings::load(['categories' => ['custom_1' => $new]]);
+$check($catalog['categories']['custom_1'] === $new, 'A complete new category must preserve its own balance without inherited units.');
+$check($catalog['categories']['tiny'] === $defaults['categories']['tiny'], 'Adding a category must preserve its neighbors.');
 $check(Settings::load($defaults) === $defaults, 'Normalized settings must load without changing their meaning.');
 $legacy = Settings::load(['active_seconds' => [3, 9]]);
 $check($legacy['categories'] === $defaults['categories'], 'Deprecated seconds must not overwrite category hours.');
@@ -101,7 +113,12 @@ foreach ([
   ['fleet_limit_multiplier' => INF],
   ['categories' => null],
   ['categories' => ['enormous' => []]],
-  ['categories' => ['tiny' => null]],
+  ['categories' => ['Bad-Key' => $new]],
+  ['categories' => ['1new' => $new]],
+  ['categories' => [str_repeat('a', 65) => $new]],
+  ['categories' => ['new' => array_diff_key($new, ['tech' => true])]],
+  ['categories' => ['new' => array_replace($new, ['garrison_points' => ['mean' => 500]])]],
+  ['categories' => ['new' => array_replace($new, ['phases_hours' => []])]],
   ['categories' => ['tiny' => ['typo' => 1]]],
   ['categories' => ['tiny' => ['weight' => -1]]],
   ['categories' => ['tiny' => ['weight' => NAN]]],
@@ -116,11 +133,11 @@ foreach ([
   ['categories' => ['tiny' => ['fleet_share_percent' => 101]]],
   ['categories' => ['tiny' => ['resource_percent' => -1]]],
   ['categories' => ['tiny' => ['resource_spread_percent' => 101]]],
-  ['categories' => ['tiny' => ['tech' => [105 => ['mean' => 3]]]]],
-  ['categories' => ['tiny' => ['tech' => [106 => ['spread_percent' => 10]]]]],
-  ['categories' => ['tiny' => ['tech' => [106 => ['mean' => 1.5]]]]],
-  ['categories' => ['tiny' => ['tech' => [106 => ['spread' => -1]]]]],
-  ['categories' => ['tiny' => ['tech' => [106 => ['mean' => 999, 'spread' => 2]]]]],
+  ['categories' => ['tiny' => ['tech' => [105 => 3]]]],
+  ['categories' => ['tiny' => ['tech' => [106 => ['mean' => 8, 'spread' => 2]]]]],
+  ['categories' => ['tiny' => ['tech' => [106 => 1.5]]]],
+  ['categories' => ['tiny' => ['tech' => [106 => -1]]]],
+  ['categories' => ['tiny' => ['tech' => [106 => 1001]]]],
   ['categories' => ['tiny' => ['fleet_weights' => '204:1']]],
   ['categories' => ['tiny' => ['fleet_weights' => ['unknown' => 1]]]],
   ['categories' => ['tiny' => ['fleet_weights' => [204 => -1]]]],

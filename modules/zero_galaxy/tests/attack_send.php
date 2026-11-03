@@ -283,7 +283,7 @@ try {
   $db->query("UPDATE {$prefix}users SET user_bot = " . Storage::NPC_BOT_TYPE . " WHERE id = {$npcId}");
   $db->query("DELETE FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$npcId}");
   $spyRejected([], 'A bot marker without module ownership cannot bypass point protection', $lang['fl_attack_error'][ATTACK_NOOB]);
-  $db->query("INSERT INTO {$prefix}zero_galaxy_npcs (owner_id,rift_id) VALUES ({$npcId},{$riftId})");
+  $db->query("INSERT INTO {$prefix}zero_galaxy_npcs (owner_id,category_key) VALUES ({$npcId},'tiny')");
   $refresh();
   $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
   $response = $spySend(['shipcount' => '1']);

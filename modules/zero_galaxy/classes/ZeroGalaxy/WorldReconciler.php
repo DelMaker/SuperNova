@@ -22,7 +22,8 @@ class WorldReconciler {
       if (!$force && (int) $state['next_tick_at'] > $now) {
         return;
       }
-      $legacyOwnerId = $this->bodies->legacyOwner($state, $now);
+      $legacyOwnerId = (int) $state['npc_owner_id'];
+      $owners = $this->bodies->syncOwners($settings['categories'], $state, $now);
       $occupied = [];
       $categoryCounts = [];
       $nextTransition = $now + $settings['tick_seconds'];
@@ -30,11 +31,15 @@ class WorldReconciler {
         $phase = Lifecycle::phase($rift, $now);
         $profile = Profile::read($rift);
         $ownerId = (int) ($rift['npc_owner_id'] ?? 0) ?: $legacyOwnerId;
-        if ($profile && in_array($phase, ['active', 'unstable'], true)) {
-          $ownerId = $this->bodies->riftOwner($rift, $profile, $now);
-        } elseif (!empty($rift['npc_owner_id'])) {
-          $this->bodies->verifyOwner($ownerId, (int) $rift['rift_id']);
+        $key = $profile['category']['key'] ?? '';
+        if (!isset($owners[$key])) {
+          $planet = $this->bodies->planet($rift, $ownerId);
+          $this->bodies->removePlanet($rift, $ownerId, $planet);
+          $this->records->delete((int) $rift['rift_id']);
+          continue;
         }
+        $this->bodies->assignOwner($rift, $owners[$key], $legacyOwnerId);
+        $ownerId = $owners[$key];
         $planet = $this->bodies->planet($rift, $ownerId);
         if ($phase === 'active' || $phase === 'unstable') {
           $this->bodies->materialize($rift, $ownerId, $now, $phase, $planet);
@@ -46,10 +51,7 @@ class WorldReconciler {
           continue;
         }
         $occupied[(int) $rift['system']][(int) $rift['position']] = true;
-        if ($profile) {
-          $key = $profile['category']['key'];
-          $categoryCounts[$key] = ($categoryCounts[$key] ?? 0) + 1;
-        }
+        $categoryCounts[$key] = ($categoryCounts[$key] ?? 0) + 1;
         $deadline = Lifecycle::nextTransition($rift, $now);
         if ($deadline > $now) {
           $nextTransition = min($nextTransition, $deadline);
@@ -71,19 +73,16 @@ class WorldReconciler {
         $count = $this->birthCount((float) $mean, count($free), $initial);
         shuffle($free);
         for ($i = 0; $i < $count; $i++) {
-          $birthSettings = $settings;
-          $snapshotData = $settings;
-          if (!empty($settings['categories'])) {
-            $categoryKey = Profile::choose($settings['categories'], $categoryCounts);
-            if ($categoryKey === null) { break; }
-            $category = $settings['categories'][$categoryKey];
-            $profile = ($this->createProfile)($categoryKey, $category, $settings['fleet_limit_multiplier']);
-            $snapshotData = ['profile' => $profile, 'category_settings' => $category,
-              'fleet_limit_multiplier' => $settings['fleet_limit_multiplier']];
-            $birthSettings = array_replace($settings, Settings::categoryPhaseRanges($category));
-            $categoryCounts[$categoryKey] = ($categoryCounts[$categoryKey] ?? 0) + 1;
-          }
+          $categoryKey = Profile::choose($settings['categories'], $categoryCounts);
+          if ($categoryKey === null) { break; }
+          $category = $settings['categories'][$categoryKey];
+          $profile = ($this->createProfile)($categoryKey, $category, $settings['fleet_limit_multiplier']);
+          $snapshotData = ['profile' => $profile, 'category_settings' => $category,
+            'fleet_limit_multiplier' => $settings['fleet_limit_multiplier']];
+          $birthSettings = array_replace($settings, Settings::categoryPhaseRanges($category));
+          $categoryCounts[$categoryKey] = ($categoryCounts[$categoryKey] ?? 0) + 1;
           $rift = Lifecycle::create($now, $birthSettings);
+          $rift['npc_owner_id'] = $owners[$categoryKey];
           $this->records->insert($rift, $system, $free[$i], $snapshotData);
           $nextTransition = min($nextTransition, $rift['opens_at']);
         }

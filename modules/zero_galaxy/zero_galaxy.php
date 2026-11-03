@@ -23,6 +23,7 @@ class zero_galaxy extends sn_module {
   public $versionCommitted = '';
   private $storage;
   private $settings;
+  private $settingsError;
   private $worldError;
 
   public function __construct($filename = __FILE__) {
@@ -147,6 +148,7 @@ class zero_galaxy extends sn_module {
       try { $this->settings = Settings::load($this->config); }
       catch (InvalidArgumentException $error) {
         error_log('Zero Galaxy configuration: ' . $error->getMessage());
+        $this->settingsError = $error;
         $this->settings = Settings::load(['target_active_per_system' => 0, 'acs_enabled' => false]);
       }
     }
@@ -200,14 +202,10 @@ class zero_galaxy extends sn_module {
         $this->requireDispatcher();
       }
       if (!$this->storage) {
-        try {
-          $this->settings = $this->effectiveSettings();
-          Profile::validateSettings($this->settings);
-        } catch (InvalidArgumentException $error) {
-          // A bad balance edit must not keep expired planets alive for fleets.
-          error_log('Zero Galaxy configuration: ' . $error->getMessage());
-          $this->settings = Settings::load(['target_active_per_system' => 0, 'acs_enabled' => false]);
-        }
+        $this->settings = $this->effectiveSettings();
+        // A fallback must never remove categories missing from the defaults.
+        if ($this->settingsError) { throw $this->settingsError; }
+        Profile::validateSettings($this->settings);
         $this->storage = new Storage(SN::$db->link, SN::$db->db_prefix);
       }
       if ($checkDispatcher) {

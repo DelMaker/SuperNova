@@ -13,6 +13,9 @@ class NativeNpcPlanets implements WorldBodies {
   private $units;
   private $npcs;
   private $fleets;
+  private $owners = [];
+  private $knownOwners = [];
+  private $legacyOwnerId = 0;
 
   public function __construct(RiftRepositorySql $records) {
     $this->records = $records;
@@ -22,60 +25,102 @@ class NativeNpcPlanets implements WorldBodies {
     }
   }
 
-  private function npcName(int $ownerId = 0): string {
-    $name = Storage::NPC_NAME;
-    $safe = $this->records->escape($name);
-    if ($this->records->query("SELECT id FROM {$this->users} WHERE username = '{$safe}' AND id <> {$ownerId} LIMIT 1")->num_rows) {
-      $name .= ' ' . bin2hex(random_bytes(2));
+  public function syncOwners(array $categories, array $state, int $now): array {
+    $this->owners = $this->knownOwners = [];
+    $this->legacyOwnerId = (int) $state['npc_owner_id'];
+    $registered = [];
+    $rows = $this->records->query("SELECT u.*, n.category_key FROM {$this->npcs} n
+      JOIN {$this->users} u ON u.id = n.owner_id ORDER BY u.id FOR UPDATE");
+    while ($owner = $rows->fetch_assoc()) {
+      $this->verifyOwner($owner);
+      $registered[$owner['category_key']] = (int) $owner['id'];
     }
-    return $this->records->escape($name);
+    if ($this->legacyOwnerId && !isset($this->knownOwners[$this->legacyOwnerId])) {
+      $owner = $this->records->query("SELECT * FROM {$this->users} WHERE id = {$this->legacyOwnerId} FOR UPDATE")->fetch_assoc();
+      $this->verifyOwner($owner);
+    }
+    foreach ($categories as $key => $category) {
+      $ownerId = $registered[$key] ?? $this->createOwner($key, $category['name'], $now);
+      $this->owners[$key] = $ownerId;
+      $this->syncTech($ownerId, $category['tech']);
+      $this->records->query("UPDATE {$this->users} SET onlinetime = {$now} WHERE id = {$ownerId}");
+    }
+    return $this->owners;
   }
 
-  private function disabledPassword(): string {
-    // Non-hex, non-numeric and longer than MD5; even loose comparison cannot match.
-    return '!' . bin2hex(random_bytes(31)) . '!';
-  }
-
-  public function legacyOwner(array $state, int $now): int {
-    $ownerId = (int) $state['npc_owner_id'];
-    if (!$ownerId) {
-      $name = $this->npcName();
-      // Legacy passwords are 32-character MD5 hashes. This value cannot match;
-      // no account or account translation is created for this NPC.
-      $password = $this->disabledPassword();
-      $this->records->query("INSERT INTO {$this->users}
-        (username, password, salt, authlevel, user_bot, galaxy, system, planet,
-         id_planet, current_planet, parent_account_id, parent_account_global,
-         register_time, onlinetime, vacation, deltime, email, email_2)
-        VALUES ('{$name}', '{$password}', '', 0, " . Storage::NPC_BOT_TYPE . ", 0, 0, 0,
-          0, 0, 0, 0, {$now}, {$now}, 0, 0, '', '')");
-      $ownerId = $this->records->insertId();
-      $this->records->query("UPDATE {$this->state} SET npc_owner_id = {$ownerId} WHERE id = 1");
-    }
-    $owner = $this->records->query("SELECT * FROM {$this->users} WHERE id = {$ownerId} FOR UPDATE")->fetch_assoc();
-    if (!$owner || (int) $owner['authlevel'] !== 0 || (int) $owner['user_bot'] !== Storage::NPC_BOT_TYPE
+  private function verifyOwner(?array $owner): void {
+    if (!$owner || (int) $owner['user_bot'] !== Storage::NPC_BOT_TYPE || (int) $owner['authlevel'] !== 0
       || (int) $owner['galaxy'] !== 0 || (int) $owner['id_planet'] !== 0 || (int) $owner['current_planet'] !== 0
       || (int) $owner['parent_account_id'] !== 0 || (int) $owner['parent_account_global'] !== 0
-      || (strpos($owner['username'], Storage::NPC_NAME) !== 0 && !preg_match('/^Zero Galaxy [a-f0-9]{16}$/D', $owner['username']))
-      || strlen($owner['password']) !== 64) {
-      throw new RuntimeException('Zero Galaxy NPC ownership marker is invalid; no planets were changed');
+      || strlen($owner['password']) !== 64 || $owner['password'][0] !== '!') {
+      throw new RuntimeException('Zero Galaxy NPC identity is invalid');
     }
-    if (strpos($owner['username'], Storage::NPC_NAME) !== 0) {
-      $name = $this->npcName($ownerId);
-      $this->records->query("UPDATE {$this->users} SET username = '{$name}' WHERE id = {$ownerId}");
+    $this->knownOwners[(int) $owner['id']] = true;
+  }
+
+  private function createOwner(string $key, string $categoryName, int $now): int {
+    $categoryName = preg_replace('/[\x{10000}-\x{10FFFF}]/u', "\u{FFFD}", $categoryName);
+    preg_match('/^.{1,32}/us', Storage::NPC_NAME . ' ' . $categoryName, $match);
+    $name = $this->records->escape($match[0]);
+    while ($this->records->query("SELECT id FROM {$this->users} WHERE username = '{$name}' LIMIT 1")->num_rows) {
+      $name = 'Rift ' . bin2hex(random_bytes(8));
     }
-    if ($owner['password'][0] !== '!') {
-      $password = $this->disabledPassword();
-      $this->records->query("UPDATE {$this->users} SET password = '{$password}' WHERE id = {$ownerId}");
-    }
-    $this->records->query("UPDATE {$this->users} SET onlinetime = {$now} WHERE id = {$ownerId}");
+    // A non-MD5 sentinel disables the native legacy login; no account is created.
+    $password = '!' . bin2hex(random_bytes(31)) . '!';
+    $this->records->query("INSERT INTO {$this->users}
+      (username, password, salt, authlevel, user_bot, galaxy, system, planet, id_planet, current_planet,
+       parent_account_id, parent_account_global, register_time, onlinetime, vacation, deltime, email, email_2)
+      VALUES ('{$name}', '{$password}', '', 0, " . Storage::NPC_BOT_TYPE . ", 0, 0, 0, 0, 0,
+        0, 0, {$now}, {$now}, 0, 0, '', '')");
+    $ownerId = $this->records->insertId();
+    $key = $this->records->escape($key);
+    $this->records->query("INSERT INTO {$this->npcs} (owner_id, category_key) VALUES ({$ownerId}, '{$key}')");
+    $this->knownOwners[$ownerId] = true;
     return $ownerId;
+  }
+
+  private function syncTech(int $ownerId, array $tech): void {
+    $levels = [];
+    $where = "unit_player_id = {$ownerId} AND unit_location_type = 4 AND unit_location_id = {$ownerId} AND unit_type = 100";
+    $rows = $this->records->query("SELECT unit_snid, unit_level FROM {$this->units} WHERE {$where} FOR UPDATE");
+    while ($row = $rows->fetch_assoc()) { $levels[(int) $row['unit_snid']] = (int) $row['unit_level']; }
+    $tech = array_filter($tech);
+    if ($levels == $tech) { return; }
+    $this->records->query("DELETE FROM {$this->units} WHERE {$where}");
+    foreach ($tech as $id => $level) {
+      $this->records->query("INSERT INTO {$this->units}
+        (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
+        VALUES ({$ownerId}, 4, {$ownerId}, 100, " . (int) $id . ", " . (int) $level . ")");
+    }
+  }
+
+  public function assignOwner(array &$rift, int $ownerId, int $legacyOwnerId): void {
+    $oldOwnerId = (int) ($rift['npc_owner_id'] ?? 0) ?: $legacyOwnerId;
+    if ($oldOwnerId === $ownerId) { return; }
+    if ($oldOwnerId && !isset($this->knownOwners[$oldOwnerId])) {
+      throw new RuntimeException('Zero Galaxy rift has an unregistered owner');
+    }
+    $planet = $this->planet($rift, $oldOwnerId);
+    if ($planet) {
+      $planetId = (int) $planet['id'];
+      $this->records->query("UPDATE {$this->units} SET unit_player_id = {$ownerId}
+        WHERE unit_location_type = 1 AND unit_location_id = {$planetId} AND unit_player_id = {$oldOwnerId}");
+      $this->records->query("UPDATE {$this->planets} SET id_owner = {$ownerId} WHERE id = {$planetId}");
+    }
+    $this->records->query("UPDATE {$this->fleets} SET fleet_target_owner = {$ownerId}
+      WHERE fleet_target_owner = {$oldOwnerId} AND fleet_end_galaxy = 0
+        AND fleet_end_system = " . (int) $rift['system'] . " AND fleet_end_planet = " . (int) $rift['position']);
+    $this->records->query("UPDATE {$this->rifts} SET npc_owner_id = {$ownerId} WHERE rift_id = " . (int) $rift['rift_id']);
+    $rift['npc_owner_id'] = $ownerId;
   }
 
   public function planet(array $rift, int $ownerId): ?array {
     $planetId = (int) $rift['planet_id'];
     if (!$planetId) {
       return null;
+    }
+    if (!isset($this->knownOwners[$ownerId])) {
+      throw new RuntimeException('Zero Galaxy planet has an unregistered owner');
     }
     $planet = $this->records->query("SELECT * FROM {$this->planets} WHERE id = {$planetId} FOR UPDATE")->fetch_assoc();
     if (!$planet) {
@@ -89,83 +134,19 @@ class NativeNpcPlanets implements WorldBodies {
     return $planet;
   }
 
-  public function riftOwner(array &$rift, array $profile, int $now): int {
-    $riftId = (int) $rift['rift_id'];
-    $ownerId = (int) ($rift['npc_owner_id'] ?? 0);
-    if (!$ownerId) {
-      $baseName = Storage::NPC_NAME . ' #' . $riftId;
-      if (!preg_match('/^.{1,32}$/uD', $baseName)) { $baseName = 'Разлом #' . $riftId; }
-      $name = $this->records->escape($baseName);
-      while ($this->records->query("SELECT id FROM {$this->users} WHERE username = '{$name}' LIMIT 1")->num_rows) {
-        // Even a 64-bit rift ID plus nonce fits the native 32-character name.
-        $name = $this->records->escape('#' . $riftId . ' ' . bin2hex(random_bytes(4)));
-      }
-      $password = $this->disabledPassword();
-      $this->records->query("INSERT INTO {$this->users}
-        (username, password, salt, authlevel, user_bot, galaxy, system, planet, id_planet, current_planet,
-         parent_account_id, parent_account_global, register_time, onlinetime, vacation, deltime, email, email_2)
-        VALUES ('{$name}', '{$password}', '', 0, " . Storage::NPC_BOT_TYPE . ", 0, 0, 0, 0, 0,
-          0, 0, {$now}, {$now}, 0, 0, '', '')");
-      $ownerId = $this->records->insertId();
-      $this->records->query("INSERT INTO {$this->npcs} (owner_id, rift_id) VALUES ({$ownerId}, {$riftId})");
-      foreach ($profile['tech'] as $id => $level) {
-        if ($level > 0) {
-          $this->records->query("INSERT INTO {$this->units}
-            (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
-            VALUES ({$ownerId}, 4, {$ownerId}, 100, " . (int) $id . ", " . (int) $level . ")");
-        }
-      }
-      $this->records->query("UPDATE {$this->rifts} SET npc_owner_id = {$ownerId} WHERE rift_id = {$riftId}");
-      $rift['npc_owner_id'] = $ownerId;
-    }
-    $this->verifyOwner($ownerId, $riftId);
-    $this->records->query("UPDATE {$this->users} SET onlinetime = {$now} WHERE id = {$ownerId}");
-    return $ownerId;
-  }
-
-  public function verifyOwner(int $ownerId, int $riftId): void {
-    $owner = $this->records->query("SELECT u.* FROM {$this->users} u JOIN {$this->npcs} n ON n.owner_id = u.id
-      WHERE n.owner_id = {$ownerId} AND n.rift_id = {$riftId} FOR UPDATE")->fetch_assoc();
-    if (!$owner || (int) $owner['user_bot'] !== Storage::NPC_BOT_TYPE || (int) $owner['authlevel'] !== 0
-      || (int) $owner['galaxy'] !== 0 || (int) $owner['id_planet'] !== 0 || (int) $owner['current_planet'] !== 0
-      || (int) $owner['parent_account_id'] !== 0 || (int) $owner['parent_account_global'] !== 0
-      || !preg_match('/^(?:' . preg_quote(Storage::NPC_NAME . ' #' . $riftId, '/') . '(?: [a-f0-9]{8})?|'
-        . preg_quote('Разлом #' . $riftId, '/') . '|#' . $riftId . ' [a-f0-9]{8})$/D', $owner['username'])
-      || strlen($owner['password']) !== 64
-      || $owner['password'][0] !== '!') {
-      throw new RuntimeException('Zero Galaxy per-rift NPC identity is invalid');
-    }
-  }
-
   public function removeUnusedOwners(): void {
-    // Lock owners before inventory, including reads inside the filtering subquery.
-    $this->records->query("SELECT u.id FROM {$this->users} u JOIN {$this->npcs} n ON n.owner_id = u.id
-      LEFT JOIN {$this->rifts} r ON r.rift_id = n.rift_id
-      WHERE r.rift_id IS NULL ORDER BY u.id FOR UPDATE");
-    // External grants may add player inventory; preserve it and defer retirement.
-    $rows = $this->records->query("SELECT n.* FROM {$this->npcs} n LEFT JOIN {$this->rifts} r ON r.rift_id = n.rift_id
-      WHERE r.rift_id IS NULL AND NOT EXISTS (SELECT 1 FROM {$this->units} u
-        WHERE u.unit_player_id = n.owner_id
-          AND (u.unit_location_type <> 4 OR u.unit_location_id <> n.owner_id OR u.unit_type <> 100))
-      ORDER BY n.owner_id FOR UPDATE");
-    while ($npc = $rows->fetch_assoc()) {
-      $ownerId = (int) $npc['owner_id'];
-      // Incoming and returning fleets still refer to their original target owner.
-      if ($this->records->query("SELECT fleet_id FROM {$this->fleets} WHERE fleet_owner = {$ownerId}
-        OR fleet_target_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows
-        || $this->records->query("SELECT id FROM {$this->planets} WHERE id_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows) {
-        continue;
+    foreach (array_diff(array_keys($this->knownOwners), array_values($this->owners)) as $ownerId) {
+      if ($this->records->query("SELECT id FROM {$this->planets} WHERE id_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows
+        || $this->records->query("SELECT fleet_id FROM {$this->fleets} WHERE fleet_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows) {
+        throw new RuntimeException('Zero Galaxy retired NPC still owns planets or fleets');
       }
-      $this->verifyOwner($ownerId, (int) $npc['rift_id']);
-      // Recheck after locking the owner, in case another writer added inventory.
-      if ($this->records->query("SELECT unit_id FROM {$this->units} WHERE unit_player_id = {$ownerId}
-        AND (unit_location_type <> 4 OR unit_location_id <> {$ownerId} OR unit_type <> 100) LIMIT 1 FOR UPDATE")->num_rows) {
-        continue;
-      }
-      $this->records->query("DELETE FROM {$this->units} WHERE unit_player_id = {$ownerId}
-        AND unit_location_type = 4 AND unit_location_id = {$ownerId} AND unit_type = 100");
+      $this->records->query("UPDATE {$this->fleets} SET fleet_target_owner = 0 WHERE fleet_target_owner = {$ownerId}");
+      $this->records->query("DELETE FROM {$this->units} WHERE unit_player_id = {$ownerId}");
       $this->records->query("DELETE FROM {$this->users} WHERE id = {$ownerId}");
       $this->records->query("DELETE FROM {$this->npcs} WHERE owner_id = {$ownerId}");
+    }
+    if ($this->legacyOwnerId) {
+      $this->records->query("UPDATE {$this->state} SET npc_owner_id = 0 WHERE id = 1");
     }
   }
 

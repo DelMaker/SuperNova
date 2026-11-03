@@ -7,6 +7,8 @@ use InvalidArgumentException;
 class Settings {
   const PHASES = ['energy', 'active', 'unstable', 'closed'];
   const TECH_IDS = [106, 108, 109, 110, 111, 113, 114, 115, 117, 118];
+  const CATEGORY_KEYS = ['name', 'color', 'weight', 'limit', 'garrison_points', 'fleet_share_percent',
+    'resource_percent', 'resource_spread_percent', 'fleet_weights', 'defence_weights', 'tech', 'phases_hours'];
   // Оставляем запас для расчёта границ в 64-bit PHP и целых чисел JSON/JS.
   const MAX_POINTS = 4000000000000000;
 
@@ -45,17 +47,20 @@ class Settings {
       }
     }
 
-    if (!is_array($settings['categories']) || array_diff_key($settings['categories'], $defaults['categories'])) {
-      throw new InvalidArgumentException('Unknown or invalid categories');
+    if (!is_array($settings['categories'])) {
+      throw new InvalidArgumentException('Invalid categories');
     }
     // Только выбранные поля выбранной категории заменяются; соседние сохраняются.
     $categories = [];
-    foreach ($defaults['categories'] as $key => $base) {
-      $category = array_key_exists($key, $settings['categories']) ? $settings['categories'][$key] : [];
+    foreach (array_replace($defaults['categories'], $settings['categories']) as $key => $category) {
+      if (!is_string($key) || !preg_match('/^[a-z][a-z0-9_]{0,63}$/D', $key)) {
+        throw new InvalidArgumentException('Invalid category key');
+      }
+      if ($category === null) { continue; }
       if (!is_array($category)) {
         throw new InvalidArgumentException('Invalid category: ' . $key);
       }
-      $categories[$key] = self::category($base, $category, $key);
+      $categories[$key] = self::category($defaults['categories'][$key] ?? [], $category, $key);
     }
     $settings['categories'] = $categories;
 
@@ -87,8 +92,11 @@ class Settings {
   }
 
   private static function category(array $defaults, array $override, string $key): array {
-    self::knownKeys($override, $defaults, $key);
+    self::knownKeys($override, array_fill_keys(self::CATEGORY_KEYS, true), $key);
     $category = array_replace($defaults, $override);
+    if (array_diff(self::CATEGORY_KEYS, array_keys($category))) {
+      throw new InvalidArgumentException('Incomplete category: ' . $key);
+    }
     if (!is_string($category['name']) || trim($category['name']) === ''
       || !preg_match('/^[^<>\x00-\x1F]{1,80}$/uD', $category['name'])) {
       throw new InvalidArgumentException('Invalid category name: ' . $key);
@@ -99,7 +107,7 @@ class Settings {
     $category['color'] = strtoupper($category['color']);
     $category['weight'] = self::number($category['weight'], $key . '.weight', 0, 1000000);
     $category['limit'] = self::integer($category['limit'], $key . '.limit', -1, 2147483647);
-    $category['garrison_points'] = self::distribution($defaults['garrison_points'],
+    $category['garrison_points'] = self::distribution($defaults['garrison_points'] ?? [],
       $category['garrison_points'], $key . '.garrison_points', 1, self::MAX_POINTS, true);
     $category['fleet_share_percent'] = self::number($category['fleet_share_percent'],
       $key . '.fleet_share_percent', 0, 100);
@@ -112,38 +120,33 @@ class Settings {
       if (!is_array($category[$weights])) {
         throw new InvalidArgumentException('Invalid unit weights: ' . $key . '.' . $weights);
       }
-      $category[$weights] = self::unitWeights(array_replace($defaults[$weights], $category[$weights]),
+      $category[$weights] = self::unitWeights(array_replace($defaults[$weights] ?? [], $category[$weights]),
         $key . '.' . $weights);
     }
 
     if (!is_array($category['tech'])) {
       throw new InvalidArgumentException('Invalid technology settings: ' . $key);
     }
-    $tech = array_replace($defaults['tech'], $category['tech']);
-    foreach ($tech as $id => $distribution) {
+    $tech = [];
+    foreach ($category['tech'] as $id => $level) {
       $id = self::integer($id, $key . '.tech ID', 1, 2147483647);
-      if (!in_array($id, self::TECH_IDS, true) || !is_array($distribution)) {
+      if (!in_array($id, self::TECH_IDS, true)) {
         throw new InvalidArgumentException('Unknown technology: ' . $id);
       }
-      $base = $defaults['tech'][$id] ?? ['mean' => 0, 'spread' => 0];
-      self::knownKeys($distribution, $base, $key . '.tech.' . $id);
-      $distribution = array_replace($base, $distribution);
-      $distribution['mean'] = self::integer($distribution['mean'], $key . '.tech.mean', 0, 1000);
-      $distribution['spread'] = self::integer($distribution['spread'], $key . '.tech.spread', 0, 1000);
-      if ($distribution['mean'] + $distribution['spread'] > 1000) {
-        throw new InvalidArgumentException('Technology upper level exceeds 1000: ' . $id);
-      }
-      $tech[$id] = $distribution;
+      $tech[$id] = self::integer($level, $key . '.tech.' . $id, 0, 1000);
     }
     $category['tech'] = $tech;
 
     if (!is_array($category['phases_hours'])) {
       throw new InvalidArgumentException('Invalid phase settings: ' . $key);
     }
-    self::knownKeys($category['phases_hours'], $defaults['phases_hours'], $key . '.phases_hours');
-    $phases = array_replace($defaults['phases_hours'], $category['phases_hours']);
+    self::knownKeys($category['phases_hours'], array_fill_keys(self::PHASES, true), $key . '.phases_hours');
+    $phases = array_replace($defaults['phases_hours'] ?? [], $category['phases_hours']);
+    if (array_diff(self::PHASES, array_keys($phases))) {
+      throw new InvalidArgumentException('Incomplete phases: ' . $key);
+    }
     foreach (self::PHASES as $phase) {
-      $phases[$phase] = self::distribution($defaults['phases_hours'][$phase], $phases[$phase],
+      $phases[$phase] = self::distribution($defaults['phases_hours'][$phase] ?? [], $phases[$phase],
         $key . '.phases_hours.' . $phase, 0.000000001, 8760, false);
     }
     $category['phases_hours'] = $phases;
@@ -158,8 +161,11 @@ class Settings {
     if (!is_array($value)) {
       throw new InvalidArgumentException('Invalid distribution: ' . $key);
     }
-    self::knownKeys($value, $defaults, $key);
+    self::knownKeys($value, ['mean' => true, 'spread_percent' => true], $key);
     $value = array_replace($defaults, $value);
+    if (!array_key_exists('mean', $value) || !array_key_exists('spread_percent', $value)) {
+      throw new InvalidArgumentException('Incomplete distribution: ' . $key);
+    }
     $value['mean'] = $integer ? self::integer($value['mean'], $key . '.mean', $minimum, $maximum)
       : self::number($value['mean'], $key . '.mean', $minimum, $maximum);
     $value['spread_percent'] = self::number($value['spread_percent'], $key . '.spread_percent', 0, 100);

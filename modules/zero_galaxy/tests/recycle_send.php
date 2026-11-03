@@ -81,14 +81,17 @@ try {
   }
   $born = SN_TIME_NOW - 10; $opens = SN_TIME_NOW - 9;
   $unstable = SN_TIME_NOW + 10000; $closes = SN_TIME_NOW + 20000; $disappears = SN_TIME_NOW + 30000;
+  $snapshot = $db->real_escape_string(json_encode(['profile' => ['version' => 1,
+    'category' => ['key' => 'tiny', 'name' => 'Крошечный', 'color' => '#ADFF2F'],
+    'fleet' => [], 'defence' => [], 'resources' => [901 => 0, 902 => 0, 903 => 0]]]));
   $db->query("INSERT INTO {$prefix}zero_galaxy_rifts
     (system,position,born_at,opens_at,unstable_at,closes_at,disappears_at,image,config_snapshot)
-    VALUES (1,1,{$born},{$opens},{$unstable},{$closes},{$disappears},'normaltempplanet01','{}')");
+    VALUES (1,1,{$born},{$opens},{$unstable},{$closes},{$disappears},'normaltempplanet01','{$snapshot}')");
   $riftId = (int) $db->insert_id;
   $storage->tick(SN_TIME_NOW, $settings, 1, 1, true);
   $rift = $one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}");
   $targetId = (int) $rift['planet_id'];
-  $ownerId = (int) $scalar("SELECT npc_owner_id FROM {$prefix}zero_galaxy_state WHERE id=1");
+  $ownerId = (int) $rift['npc_owner_id'];
   $db->query("UPDATE {$prefix}planets SET debris_metal=30000,debris_crystal=10000 WHERE id={$targetId}");
 
   $refresh = function () use ($pilot, $sourceId) {

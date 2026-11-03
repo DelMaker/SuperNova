@@ -27,7 +27,7 @@ class SchemaInstaller {
       // A new Storage object is created on every request. Check the installed
       // schema and singleton with a read before attempting any DDL or writes.
       $installed = $this->records->query("SELECT s.id, s.npc_owner_id, s.stats_hidden_ids,
-          r.planet_id, r.npc_owner_id, n.owner_id, n.rift_id
+          r.planet_id, r.npc_owner_id, n.owner_id, n.category_key
         FROM {$this->state} s LEFT JOIN {$this->rifts} r ON 0 LEFT JOIN {$this->npcs} n ON 0
         WHERE s.id = 1 LIMIT 1");
       if ($installed->num_rows) {
@@ -57,9 +57,19 @@ class SchemaInstaller {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
     $this->records->query("CREATE TABLE IF NOT EXISTS {$this->npcs} (
       owner_id BIGINT UNSIGNED NOT NULL,
-      rift_id BIGINT UNSIGNED NOT NULL,
-      PRIMARY KEY (owner_id), UNIQUE KEY rift (rift_id)
+      category_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+      PRIMARY KEY (owner_id), UNIQUE KEY category (category_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    if (!$this->records->query("SHOW COLUMNS FROM {$this->npcs} LIKE 'category_key'")->num_rows) {
+      // Numeric keys retain the old owners until the next tick transfers their planets.
+      try {
+        $this->records->query("ALTER TABLE {$this->npcs} DROP INDEX rift,
+          CHANGE COLUMN rift_id category_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+          ADD UNIQUE KEY category (category_key)");
+      } catch (Throwable $error) {
+        if (!$this->records->query("SHOW COLUMNS FROM {$this->npcs} LIKE 'category_key'")->num_rows) { throw $error; }
+      }
+    }
     $this->records->query("CREATE TABLE IF NOT EXISTS {$this->state} (
       id TINYINT UNSIGNED NOT NULL,
       next_tick_at BIGINT UNSIGNED NOT NULL DEFAULT 0,

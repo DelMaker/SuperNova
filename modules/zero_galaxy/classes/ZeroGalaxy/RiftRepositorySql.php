@@ -69,10 +69,11 @@ class RiftRepositorySql implements RiftRepository {
   public function insert(array $rift, int $system, int $position, array $snapshot): void {
     $snapshot = $this->escape(json_encode($snapshot, JSON_THROW_ON_ERROR));
     $image = $this->escape($rift['image']);
+    $ownerId = (int) $rift['npc_owner_id'];
     $this->query('INSERT INTO ' . $this->table('zero_galaxy_rifts') . "
-      (system, position, born_at, opens_at, unstable_at, closes_at, disappears_at, image, config_snapshot)
+      (system, position, born_at, opens_at, unstable_at, closes_at, disappears_at, image, config_snapshot, npc_owner_id)
       VALUES ({$system}, {$position}, {$rift['born_at']}, {$rift['opens_at']}, {$rift['unstable_at']},
-        {$rift['closes_at']}, {$rift['disappears_at']}, '{$image}', '{$snapshot}')");
+        {$rift['closes_at']}, {$rift['disappears_at']}, '{$image}', '{$snapshot}', {$ownerId})");
   }
 
   public function schedule(int $nextTick, int $nextGeneration, int $seededSystems): void {

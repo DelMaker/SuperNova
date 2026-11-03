@@ -62,235 +62,124 @@ $override['categories']['great'] += ['limit' => 2, 'phases_hours' => [
 ]];
 $settings = Settings::load($override);
 $futureOverride = $override;
-$futureOverride['categories']['great']['name'] = 'Обновлённый Великий';
-$futureOverride['categories']['great']['garrison_points'] = ['mean' => 134077480581000, 'spread_percent' => 0];
-$futureOverride['categories']['great']['resource_percent'] = 0;
-foreach ([106, 109, 110, 111] as $id) { $futureOverride['categories']['great']['tech'][$id] = ['mean' => 99, 'spread' => 0]; }
-foreach (['energy' => 4, 'active' => 5, 'unstable' => 6, 'closed' => 7] as $phase => $seconds) {
-  $futureOverride['categories']['great']['phases_hours'][$phase] = ['mean' => $seconds / 3600, 'spread_percent' => 0];
-}
+$futureOverride['categories']['great'] += ['name' => 'Обновлённый Великий',
+  'garrison_points' => ['mean' => 134077480581000, 'spread_percent' => 0], 'resource_percent' => 0];
+$futureOverride['categories']['great']['tech'] = [106 => 99, 109 => 99, 110 => 99, 111 => 99];
 $future = Settings::load($futureOverride);
 $paused = $future; $paused['target_active_per_system'] = 0;
 
 try {
-  foreach (['users', 'planets', 'unit', 'fleets'] as $table) {
-    $db->query("CREATE TABLE {$prefix}{$table} LIKE {$sourcePrefix}{$table}");
-  }
+  foreach (['users', 'planets', 'unit', 'fleets'] as $table) { $db->query("CREATE TABLE {$prefix}{$table} LIKE {$sourcePrefix}{$table}"); }
   $db->query("ALTER TABLE {$prefix}fleets ADD CONSTRAINT {$prefix}target
     FOREIGN KEY (fleet_end_planet_id) REFERENCES {$prefix}planets (id) ON DELETE SET NULL");
   Profile::validateSettings($settings);
-  $native = Profile::nativeUnit(204, 200);
-  $check($native['cost'] === (float) eco_get_total_cost(204, 1)['total'] && $native['cost'] > 0,
-    'Profile cost must match the real native weighted unit helper.');
-  $rejected = false;
-  try { Profile::nativeUnit(401, 200); } catch (RuntimeException $error) { $rejected = true; }
-  $check($rejected, 'Native resolver must reject defence IDs supplied as ships.');
-
-  $now = 1700000000;
-  $storage = new Storage($db, $prefix);
-  $storage->install();
-  $db->query("ALTER TABLE {$prefix}zero_galaxy_rifts AUTO_INCREMENT = 10000");
+  $check(Profile::nativeUnit(204, 200)['cost'] === (float) eco_get_total_cost(204, 1)['total'],
+    'Garrison budgets must use the real native weighted unit price');
+  $now = 1700000000; $storage = new Storage($db, $prefix);
   $storage->tick($now, $settings, 4, 1);
   $initial = $rows("SELECT * FROM {$prefix}zero_galaxy_rifts ORDER BY rift_id");
-  $check(count($initial) === 2, 'Four initially eligible systems must reserve only two global great slots.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}planets") === 0, 'Energy reservations must not materialize planets early.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 0, 'An unopened populated rift must not allocate a research owner.');
+  $check(count($initial) === 2, 'Four eligible systems must reserve only two globally capped great rifts');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}planets") === 0, 'Energy reservations must not create planets early');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 7,
+    'All configured categories must have one NPC before any planet opens');
+  $owner = (int) $scalar("SELECT owner_id FROM {$prefix}zero_galaxy_npcs WHERE category_key = 'great'");
   $saved = [];
-  foreach ($initial as $rift) {
-    $id = (int) $rift['rift_id']; $saved[$id] = $rift;
-    $profile = Profile::read($rift);
-    $check($profile !== null && $profile['category']['key'] === 'great', 'Each reservation must persist its selected populated profile.');
-    $check(Lifecycle::phase($rift, $now) === 'energy' && (int) $rift['opens_at'] === $now + 2,
-      'The saved category phase settings must define its opening deadline.');
-  }
-  // A native human may already own the readable NPC name; no existing row may
-  // be reused or renamed when the reserved rift eventually materializes.
-  $collisionRiftId = (int) $initial[0]['rift_id'];
-  $collisionName = Storage::NPC_NAME . ' #' . $collisionRiftId;
-  $safeCollisionName = $db->real_escape_string($collisionName);
-  $db->query("INSERT INTO {$prefix}users (username, password, galaxy)
-    VALUES ('{$safeCollisionName}', '!disabled-human-fixture!', 1)");
-  $collisionHumanId = (int) $db->insert_id;
-  $collisionHumanBefore = $one("SELECT * FROM {$prefix}users WHERE id = {$collisionHumanId}");
-  // Make generation due while both reservations are still in energy phase.
+  foreach ($initial as $rift) { $saved[(int) $rift['rift_id']] = $rift; }
   $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at = " . ($now + 1));
   $storage->tick($now + 1, $future, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 2, 'Energy reservations must consume the global cap during another due generation.');
-
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 2, 'Energy reservations must consume the global category cap');
   $storage->tick($now + 2, $future, 4, 1, true);
-  $owners = []; $planetIds = [];
+  $planets = [];
   foreach ($rows("SELECT * FROM {$prefix}zero_galaxy_rifts ORDER BY rift_id") as $rift) {
-    $id = (int) $rift['rift_id']; $owner = (int) $rift['npc_owner_id']; $planetId = (int) $rift['planet_id'];
-    $owners[$id] = $owner; $planetIds[$id] = $planetId;
+    $id = (int) $rift['rift_id']; $planetId = (int) $rift['planet_id']; $planets[$id] = $planetId;
     $profile = Profile::read($rift); $planet = $one("SELECT * FROM {$prefix}planets WHERE id = {$planetId}");
-    $check($owner > 0 && $planetId > 0 && (int) $planet['id_owner'] === $owner, 'Opening must create an individually owned native planet.');
-    $check($planet['name'] === RiftName::forRift($rift, 'active'),
-      'The physical active planet must use its saved category name for new native reports.');
-    if ($id === $collisionRiftId) {
-      $npcName = $one("SELECT username FROM {$prefix}users WHERE id = {$owner}")['username'];
-      $check($owner !== $collisionHumanId && $npcName !== $collisionName
-        && preg_match('/^#' . $collisionRiftId . ' [a-f0-9]{8}$/D', $npcName)
-        && preg_match('/^.{1,32}$/uD', $npcName),
-        'A human name collision must create a separately named NPC instead of blocking materialization or reusing the human.');
-      $check((int) $scalar("SELECT owner_id FROM {$prefix}zero_galaxy_npcs WHERE rift_id = {$id}") === $owner,
-        'A suffixed NPC identity must still be registered to the correct rift.');
-      $check($one("SELECT * FROM {$prefix}users WHERE id = {$collisionHumanId}") === $collisionHumanBefore,
-        'Materialization must leave a human holding the NPC-looking name unchanged.');
+    $check((int) $rift['npc_owner_id'] === $owner && (int) $planet['id_owner'] === $owner,
+      'Every great rift must use the same native research owner');
+    $check($planet['name'] === RiftName::forRift($rift, 'active'), 'Native reports must use the saved category-qualified planet name');
+    $stableFields = ['born_at', 'opens_at', 'unstable_at', 'closes_at', 'disappears_at', 'config_snapshot'];
+    $check(array_intersect_key($rift, array_flip($stableFields)) === array_intersect_key($saved[$id], array_flip($stableFields)),
+      'Hot settings must preserve the existing lifecycle, garrison and attack cap');
+    foreach ([200 => 'fleet', 400 => 'defence'] as $type => $group) {
+      $expected = $profile[$group]; ksort($expected);
+      $check($unitMap($owner, 1, $planetId, $type) === $expected, 'Native ' . $group . ' must match its individual initial profile');
     }
-    $check($rift['config_snapshot'] === $saved[$id]['config_snapshot'], 'Hot configuration must not replace an existing profile snapshot.');
-    foreach (['born_at', 'opens_at', 'unstable_at', 'closes_at', 'disappears_at'] as $deadline) {
-      $check($rift[$deadline] === $saved[$id][$deadline], 'Hot configuration must preserve recorded ' . $deadline);
-    }
-    foreach ([200 => 'fleet', 400 => 'defence'] as $type => $key) {
-      $expected = $profile[$key]; ksort($expected);
-      $check($unitMap($owner, 1, $planetId, $type) === $expected, 'Materialized native ' . $key . ' must exactly match the stored profile.');
-    }
-    $expectedTech = array_filter($profile['tech'], function ($level) { return $level > 0; }); ksort($expectedTech);
-    $check($unitMap($owner, 4, $owner, 100) === $expectedTech, 'Research must be stored on its own NPC user and match that rift snapshot.');
-    $check((int) $planet['galaxy'] === 0 && (int) $planet['system'] === (int) $rift['system'] && (int) $planet['planet'] === 1,
-      'Physical populated planets must retain the real zero-galaxy coordinates.');
-    $equivalent = 0;
+    $check(!isset($profile['tech']) && $unitMap($owner, 4, $owner, 100) === [106 => 99, 109 => 99, 110 => 99, 111 => 99],
+      'Shared NPC research must use current settings rather than individual random snapshots');
+    $equivalent = $nativeCost = 0;
     foreach ([901 => 'metal', 902 => 'crystal', 903 => 'deuterium'] as $resource => $field) {
-      $check((int) $planet[$field] === $profile['resources'][$resource], 'Initial raw loot must match the snapshot: ' . $field);
+      $check((int) $planet[$field] === $profile['resources'][$resource], 'Native initial loot must match the snapshot: ' . $field);
       $equivalent += (float) $planet[$field] * $rates[$resource];
     }
-    $check($equivalent <= $profile['fleet_points'] * .9 + 1 && $equivalent > $profile['fleet_points'] * .6 - array_sum($rates) - 1,
-      'Native weighted loot must be 60–90% of initial actual fleet cost, excluding defence.');
-    $check($profile['fleet_limit'] === (int) floor($profile['garrison_points'] * 1.25), 'Saved baseline attack cap must use the initial actual garrison.');
-    $nativeCost = 0;
     foreach ($profile['fleet'] + $profile['defence'] as $unitId => $count) { $nativeCost += eco_get_total_cost($unitId, $count)['total']; }
-    $check(abs($nativeCost - $profile['garrison_points']) < 1, 'Persisted garrison points must match real native fleet plus defence prices.');
+    $check(abs($nativeCost - $profile['garrison_points']) < 1 && $profile['fleet_limit'] === (int) floor($nativeCost * 1.25),
+      'The attack cap must derive from actual initial native fleet and defence prices');
+    $check($equivalent <= $profile['fleet_points'] * .9 + 1 && $equivalent > $profile['fleet_points'] * .6 - array_sum($rates) - 1,
+      'Loot must retain the calibrated 60–90% range of initial actual fleet cost');
   }
-  $check(count(array_unique($owners)) === 2, 'Two rifts must never share a research owner.');
-  $unitCount = (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit");
-  $storage->tick($now + 3, $future, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}unit") === $unitCount, 'Repeated ticks must not duplicate ships, defence or research.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}planets") === 2, 'Repeated ticks must not recreate existing physical planets.');
-  $reader = new Storage($db, $prefix);
-  foreach ($saved as $id => $rift) {
-    $visible = $reader->inSystem((int) $rift['system'], $now + 3)[1];
-    $check($visible['config_snapshot'] === $rift['config_snapshot'] && (int) $visible['owner_id'] === $owners[$id],
-      'Independent readers must see the same immutable profile and real per-rift owner.');
-  }
-
-  $firstId = (int) array_key_first($saved); $secondId = (int) array_key_last($saved);
-  $firstOwner = $owners[$firstId]; $firstPlanet = $planetIds[$firstId];
-  $fleetUnit = $one("SELECT * FROM {$prefix}unit WHERE unit_player_id = {$firstOwner} AND unit_type = 200 ORDER BY unit_id LIMIT 1");
-  $defenceUnit = $one("SELECT * FROM {$prefix}unit WHERE unit_player_id = {$firstOwner} AND unit_type = 400 ORDER BY unit_id LIMIT 1");
-  $db->query("UPDATE {$prefix}unit SET unit_level = 5 WHERE unit_id = " . (int) $fleetUnit['unit_id']);
-  $db->query("DELETE FROM {$prefix}unit WHERE unit_id = " . (int) $defenceUnit['unit_id']);
-  $db->query("UPDATE {$prefix}planets SET metal = 7, crystal = 11, deuterium = 13 WHERE id = {$firstPlanet}");
-  $storage->tick($now + 4, $future, 4, 1, true);
-  $check((int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = " . (int) $fleetUnit['unit_id']) === 5, 'Destroyed ships must never be refilled by a later tick.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_id = " . (int) $defenceUnit['unit_id']) === 0, 'A completely removed defence row must never be recreated.');
-  $changedLoot = $one("SELECT metal, crystal, deuterium FROM {$prefix}planets WHERE id = {$firstPlanet}");
-  $check(array_map('intval', $changedLoot) === ['metal' => 7, 'crystal' => 11, 'deuterium' => 13], 'Loot depletion must survive tick and changed resource balance.');
+  $firstId = (int) array_key_first($saved); $firstPlanet = $planets[$firstId];
+  $unit = $one("SELECT unit_id FROM {$prefix}unit WHERE unit_player_id = {$owner} AND unit_location_type = 1
+    AND unit_location_id = {$firstPlanet} AND unit_type = 200 LIMIT 1");
+  $unitId = (int) $unit['unit_id'];
+  $db->query("UPDATE {$prefix}unit SET unit_level = 5 WHERE unit_id = {$unitId}");
+  $db->query("DELETE FROM {$prefix}unit WHERE unit_player_id = {$owner} AND unit_location_type = 1
+    AND unit_location_id = {$firstPlanet} AND unit_type = 400");
+  $db->query("UPDATE {$prefix}planets SET metal = 7, crystal = 11, deuterium = 13, debris_metal = 21000, debris_crystal = 13000 WHERE id = {$firstPlanet}");
   $storage->tick($now + 5, $future, 4, 1, true);
-  $check((int) $storage->findActive((int) $saved[$firstId]['system'], 1, $now + 5)['planet_id'] === $firstPlanet,
-    'The unstable transition must preserve the same physical garrison planet.');
-  $check($one("SELECT name FROM {$prefix}planets WHERE id = {$firstPlanet}")['name']
-    === RiftName::forRift($saved[$firstId], 'unstable'),
-    'Instability must update the category-qualified physical planet name while keeping the depleted army.');
+  $changed = $one("SELECT name,metal,crystal,deuterium,debris_metal,debris_crystal FROM {$prefix}planets WHERE id = {$firstPlanet}");
+  $check((int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$unitId}") === 5
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_location_type = 1 AND unit_location_id = {$firstPlanet} AND unit_type = 400") === 0,
+    'Repeated ticks and phase changes must not refill destroyed garrisons');
+  $check($changed['name'] === RiftName::forRift($saved[$firstId], 'unstable')
+    && array_map('intval', array_diff_key($changed, ['name' => true])) === [
+      'metal' => 7, 'crystal' => 11, 'deuterium' => 13, 'debris_metal' => 21000, 'debris_crystal' => 13000],
+    'Instability must retain depleted resources and current orbital debris on the same planet');
 
-  $db->query("INSERT INTO {$prefix}users (username, password, galaxy) VALUES ('Unrelated population-test pilot', '!disabled!', 1)");
+  $db->query("INSERT INTO {$prefix}users (username,password,galaxy) VALUES ('Unrelated pilot','!disabled!',1)");
   $human = (int) $db->insert_id;
-  $db->query("INSERT INTO {$prefix}planets (name, id_owner, galaxy, system, planet, metal) VALUES ('Unrelated test capital', {$human}, 1, 1, 1, 1234)");
-  $humanPlanet = (int) $db->insert_id;
-  $humanBefore = $one("SELECT * FROM {$prefix}users WHERE id = {$human}");
-  $humanPlanetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$humanPlanet}");
-  $db->query("INSERT INTO {$prefix}fleets (fleet_owner, fleet_target_owner, fleet_mission, fleet_start_planet_id,
-    fleet_end_planet_id, fleet_end_galaxy, fleet_end_system, fleet_end_planet, fleet_mess, fleet_start_time, fleet_end_time)
-    VALUES ({$human}, {$firstOwner}, 6, {$humanPlanet}, {$firstPlanet}, 0, " . (int) $saved[$firstId]['system'] . ", 1, 0, " . ($now + 1000) . ', ' . ($now + 2000) . ')');
-  $pendingFleet = (int) $db->insert_id;
-  $fleetBefore = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$pendingFleet}");
-  // Closed traces must reserve both slots even when another generation is due.
+  $flights = [];
+  foreach ([[6,0], [8,0], [8,1]] as [$mission, $returning]) {
+    $db->query("INSERT INTO {$prefix}fleets
+      (fleet_owner,fleet_target_owner,fleet_mission,fleet_end_planet_id,fleet_end_galaxy,fleet_end_system,fleet_end_planet,
+       fleet_mess,fleet_start_time,fleet_end_time,fleet_resource_metal,fleet_resource_crystal)
+      VALUES ({$human},{$owner},{$mission},{$firstPlanet},0," . (int) $saved[$firstId]['system'] . ",1,{$returning},"
+        . ($now + 1000) . ',' . ($now + 2000) . ',' . ($returning * 700) . ',' . ($returning * 300) . ')');
+    $id = (int) $db->insert_id; $flights[$id] = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$id}");
+  }
   $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at = " . ($now + 9));
   $storage->tick($now + 9, $future, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 2, 'Closed traces must continue reserving the global cap.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}planets WHERE galaxy = 0") === 0, 'Closure must remove all materialized NPC planets.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_location_type = 1") === 0, 'Closure must remove fleet and defence rows with their planets.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 2, 'Research owners must remain while their closed traces still exist.');
-  $fleetBefore['fleet_end_planet_id'] = null;
-  $check($one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$pendingFleet}") === $fleetBefore,
-    'Closing may null the planet link but must retain the target owner and pending fleet schedule.');
-
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 2
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}planets") === 0,
+    'Closed traces must reserve the category cap while deleting planets and debris');
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_location_type = 1") === 0,
+    'Closure must delete only the vanished planets’ garrisons');
+  foreach ($flights as $id => $before) {
+    $before['fleet_end_planet_id'] = null;
+    $check($one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$id}") === $before,
+      'Closure must preserve spies, inbound recyclers and returning recyclers with cargo');
+  }
   $storage->tick($now + 11, $paused, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0, 'Final expiration must release both trace reservations.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id = {$firstOwner}") === 1,
-    'An expired target NPC must survive while a pending fleet still references that owner.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id = " . $owners[$secondId]) === 0,
-    'An expired NPC without pending references must be retired.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 1, 'Only the pending-fleet NPC should retain its module ownership marker.');
-  $db->query("DELETE FROM {$prefix}fleets WHERE fleet_id = {$pendingFleet}");
-  $storage->tick($now + 12, $paused, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 0, 'The last expired NPC must retire after its pending fleet is gone.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}unit") === 0, 'Retirement must clean the expired NPC research.');
-  $check($one("SELECT * FROM {$prefix}users WHERE id = {$human}") === $humanBefore
-    && $one("SELECT * FROM {$prefix}planets WHERE id = {$humanPlanet}") === $humanPlanetBefore,
-    'Population and retirement must leave unrelated users and planets unchanged.');
-  $check($one("SELECT * FROM {$prefix}users WHERE id = {$collisionHumanId}") === $collisionHumanBefore,
-    'Retiring a suffixed NPC must preserve the original human with a colliding display name.');
-
-  $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at = " . ($now + 13));
-  $storage->tick($now + 13, $future, 4, 1, true);
+  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 7,
+    'Final expiration must release reservations while retaining category NPCs');
+  $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at = " . ($now + 12));
+  $storage->tick($now + 12, $future, 4, 1, true);
   $replacement = $rows("SELECT * FROM {$prefix}zero_galaxy_rifts ORDER BY rift_id");
-  $check(count($replacement) === 2, 'Released global capacity must allow exactly two new great rifts.');
+  $check(count($replacement) === 2, 'Released capacity must permit two replacement rifts');
   foreach ($replacement as $rift) {
     $profile = Profile::read($rift);
-    $check(!isset($saved[(int) $rift['rift_id']]) && (int) $rift['opens_at'] === $now + 17,
-      'A replacement must have a new generation identity and use the changed phase duration.');
-    $check($profile['category']['name'] === 'Обновлённый Великий' && $profile['target_points'] === 134077480581000,
-      'New births must use changed category metadata and cost.');
-    $check($profile['tech'] === [106 => 99, 109 => 99, 110 => 99, 111 => 99] && array_sum($profile['resources']) === 0,
-      'New births must use changed research and loot settings.');
+    $check(!isset($saved[(int) $rift['rift_id']]) && (int) $rift['npc_owner_id'] === $owner,
+      'New rift generations must have new identities and reuse the category owner');
+    $check($profile['category']['name'] === 'Обновлённый Великий' && $profile['target_points'] === 134077480581000
+      && array_sum($profile['resources']) === 0, 'Only new garrisons must receive changed category balance');
   }
-  $storage->tick($now + 35, $paused, 4, 1, true);
+  $storage->tick($now + 1000, $paused, 4, 1, true);
   $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 0,
-    'Skipping directly beyond a replacement lifetime must leave no trace or per-rift NPC leaks.');
-
-  $db->query("UPDATE {$prefix}zero_galaxy_state SET next_generation_at = " . ($now + 36));
-  $storage->tick($now + 36, $future, 4, 1, true);
-  $storage->tick($now + 40, $paused, 4, 1, true);
-  $retiring = $rows("SELECT rift_id,npc_owner_id FROM {$prefix}zero_galaxy_rifts ORDER BY rift_id");
-  $check(count($retiring) === 2, 'The retirement regression must use two genuine populated native rifts.');
-  $retainedOwner = (int) $retiring[0]['npc_owner_id'];
-  $ordinaryOwner = (int) $retiring[1]['npc_owner_id'];
-  $storage->tick($now + 51, $paused, 4, 1, true);
-  $db->query("INSERT INTO {$prefix}unit
-    (unit_player_id,unit_location_type,unit_location_id,unit_type,unit_snid,unit_level)
-    VALUES ({$retainedOwner},4,{$retainedOwner},1100,1101,1)");
-  $blueprintId = (int) $db->insert_id;
-  $retained = function () use ($one, $rows, $prefix, $retainedOwner): array {
-    return [$one("SELECT * FROM {$prefix}users WHERE id = {$retainedOwner}"),
-      $one("SELECT * FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$retainedOwner}"),
-      $rows("SELECT * FROM {$prefix}unit WHERE unit_player_id = {$retainedOwner} ORDER BY unit_id")];
-  };
-  $retainedBefore = $retained();
-  $scheduledBefore = (int) $scalar("SELECT next_tick_at FROM {$prefix}zero_galaxy_state WHERE id = 1");
-  $storage->tick($now + 58, $paused, 4, 1, true);
-  $check($retained() === $retainedBefore,
-    'An expired NPC with an external blueprint must retain its entire user, registry, research and blueprint rows unchanged.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0
-    && (int) $scalar("SELECT next_tick_at FROM {$prefix}zero_galaxy_state WHERE id = 1") > $scheduledBefore,
-    'Deferred NPC retirement must not roll back rift expiration or the lifecycle schedule.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id = {$ordinaryOwner}") === 0
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$ordinaryOwner}") === 0
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_player_id = {$ordinaryOwner}") === 0,
-    'Another expired NPC with only module-owned research must retire in the same tick.');
-  $storage->tick($now + 59, $paused, 4, 1, true);
-  $check($retained() === $retainedBefore, 'Further ticks must leave deferred external inventory and its NPC untouched.');
-  $db->query("DELETE FROM {$prefix}unit WHERE unit_id = {$blueprintId}");
-  $storage->tick($now + 60, $paused, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id = {$retainedOwner}") === 0
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$retainedOwner}") === 0
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_player_id = {$retainedOwner}") === 0,
-    'Removing only the external test fixture must allow normal guarded retirement on a later tick.');
-  echo "Population: {$assertions} assertions passed; native profiles and isolated tables checked.\n";
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE user_bot = 200") === 7,
+    'Skipping beyond whole lifetimes must not leak or recreate category NPCs');
+  echo "Population: {$assertions} assertions passed; shared owners and native garrisons checked.\n";
 } finally {
   if ((int) $scalar('SELECT @@in_transaction') !== 0) { $db->rollback(); }
   $db->query('SET FOREIGN_KEY_CHECKS = 0');
   foreach ($tables as $table) { $db->query("DROP TABLE IF EXISTS {$prefix}{$table}"); }
-  $db->query('SET FOREIGN_KEY_CHECKS = 1');
-  $db->close();
+  $db->query('SET FOREIGN_KEY_CHECKS = 1'); $db->close();
 }

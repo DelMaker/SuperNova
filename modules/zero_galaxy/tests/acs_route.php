@@ -149,7 +149,23 @@ namespace {
   $check($result['outcome'] === 'blocked' && $result['message'] === 'ACS_DISABLED',
     'Malformed configuration must fail closed before native ACS creation');
   $check($result['settings']['acs_enabled'] === false && $result['settings']['target_active_per_system'] === 0.0,
-    'Invalid configuration fallback must disable ACS and births while retaining cleanup settings');
+    'Invalid configuration fallback must disable ACS and births in the UI');
+
+  $module = new zero_galaxy();
+  $configuration->setValue($module, ['categories' => ['custom' => \ZeroGalaxy\Settings::load()['categories']['tiny']], 'typo' => true]);
+  $effective = new \ReflectionMethod(zero_galaxy::class, 'effectiveSettings'); $effective->setAccessible(true);
+  $update = new \ReflectionMethod(zero_galaxy::class, 'updateWorld'); $update->setAccessible(true);
+  $storage = new \ReflectionProperty(zero_galaxy::class, 'storage'); $storage->setAccessible(true);
+  $worldError = new \ReflectionProperty(zero_galaxy::class, 'worldError'); $worldError->setAccessible(true);
+  SN::$db = new AcsRouteFixtureDb();
+  $oldLog = ini_set('error_log', '/dev/null');
+  try {
+    $fallback = $effective->invoke($module);
+    $update->invoke($module, false, false);
+  } finally { ini_set('error_log', $oldLog); }
+  $check(!isset($fallback['categories']['custom']) && $storage->getValue($module) === null
+    && $worldError->getValue($module) instanceof \InvalidArgumentException && SN::$db->queries === [],
+    'A configuration typo must stop world updates before fallback defaults can retire custom categories');
 
   echo "ACS routing: {$assertions} assertions passed; real native parameter parser and module hook, no database or game bootstrap.\n";
 }

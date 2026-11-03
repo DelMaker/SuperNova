@@ -34,11 +34,6 @@ class Storage {
     $this->world->tick($now, $settings, $maxSystem, $maxPlanet, $force);
   }
 
-  public function npcOwnerId(): int {
-    $this->install();
-    return (int) $this->records->state()['npc_owner_id'];
-  }
-
   public function inSystem(int $system, int $now): array {
     $this->install();
     return $this->records->inSystem($system, $now);

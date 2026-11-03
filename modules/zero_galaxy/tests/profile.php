@@ -44,7 +44,7 @@ $category['garrison_points'] = ['mean' => 1000, 'spread_percent' => 0];
 $category['fleet_weights'] = [202 => 1, 203 => 0];
 $category['defence_weights'] = [401 => 1];
 $category['resource_spread_percent'] = 0;
-$category['tech'] = [106 => ['mean' => 8, 'spread' => 0], 109 => ['mean' => 3, 'spread' => 0]];
+$category['tech'] = [106 => 8, 109 => 3];
 $before = $category;
 $profile = Profile::create('tiny', $category, 1.25, $rates, $resolver);
 $check($category === $before, 'Creating a profile must not mutate category settings.');
@@ -55,11 +55,15 @@ $check($profile['fleet'] === [202 => 85] && $profile['fleet_points'] === 595, 'F
 $check($profile['defence'] === [401 => 36] && $profile['defence_points'] === 396, 'Defence must fit the remaining 40% budget.');
 $check($profile['garrison_points'] === 991 && $profile['fleet_limit'] === 1238, 'Fleet limit must use actual fleet plus defence cost, not the requested budget.');
 $check($profile['resources'] === [901 => 267, 902 => 55, 903 => 16], 'Loot must use 75% of actual fleet cost and weighted 60/25/15 shares.');
-$check($profile['tech'] === [106 => 8, 109 => 3], 'Zero technology spread must preserve exact integer levels.');
+$check(!array_key_exists('tech', $profile), 'Category research must stay out of the immutable planet profile.');
 $check($resolverCalls === [[202, 200], [401, 400]], 'Disabled types must not be resolved; fleet and defence type checks must be distinct.');
 
 $snapshot = ['config_snapshot' => json_encode(['profile' => $profile, 'category_settings' => $category])];
 $check(Profile::read($snapshot) === $profile, 'The same immutable profile must be read from serialized storage.');
+$legacy = $profile;
+$legacy['tech'] = [106 => 7, 109 => 5];
+$check(Profile::read(['config_snapshot' => json_encode(['profile' => $legacy])]) === $profile,
+  'Old profile research must be ignored without changing the remaining snapshot.');
 $changed = $category;
 $changed['name'] = 'Changed';
 $changed['garrison_points']['mean'] = 2000;
@@ -85,7 +89,6 @@ $varied['garrison_points']['spread_percent'] = 20;
 $varied['fleet_weights'] = [202 => 1, 203 => 3, 204 => 100];
 $varied['defence_weights'] = [401 => 2, 402 => 1, 403 => 100];
 $varied['resource_spread_percent'] = 20;
-$varied['tech'] = [106 => ['mean' => 1, 'spread' => 4], 109 => ['mean' => 35, 'spread' => 2]];
 $sample = Profile::create('tiny', $varied, 1.25, $rates, $resolver);
 $check($sample['target_points'] >= 800 && $sample['target_points'] <= 1200, 'Random target must remain inside its configured inclusive range.');
 $fleet = $cost($sample['fleet']); $defence = $cost($sample['defence']);
@@ -96,7 +99,6 @@ $check(($sample['fleet'][204] ?? 0) <= 2 && ($sample['defence'][403] ?? 0) <= 3,
 $check($sample['garrison_points'] === $fleet + $defence && $sample['fleet_limit'] === (int) floor(($fleet + $defence) * 1.25), 'The final cap must match the materializable garrison.');
 $equivalent = $sample['resources'][901] + 2 * $sample['resources'][902] + 4 * $sample['resources'][903];
 $check($equivalent <= $fleet * .9 + 0.000001 && $equivalent > $fleet * .6 - 7.000001, 'Weighted loot must stay within 60–90% of fleet cost, allowing only conversion rounding.');
-$check($sample['tech'][106] >= 0 && $sample['tech'][106] <= 5 && $sample['tech'][109] >= 33 && $sample['tech'][109] <= 37, 'Technology spread must use absolute levels and clamp the lower bound to zero.');
 
 $capped = $category;
 $capped['fleet_weights'] = [204 => 1];

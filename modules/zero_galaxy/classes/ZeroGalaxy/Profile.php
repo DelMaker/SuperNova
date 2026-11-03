@@ -22,8 +22,10 @@ class Profile {
   }
   public static function read(array $rift): ?array {
     $snapshot = json_decode($rift['config_snapshot'] ?? '', true);
-    return isset($snapshot['profile']['version']) && $snapshot['profile']['version'] === 1
-      ? $snapshot['profile'] : null;
+    if (!isset($snapshot['profile']['version']) || $snapshot['profile']['version'] !== 1) { return null; }
+    $profile = $snapshot['profile'];
+    unset($profile['tech']);
+    return $profile;
   }
 
   public static function choose(array $categories, array $counts): ?string {
@@ -91,11 +93,6 @@ class Profile {
     $fleetBudget = floor($target * $category['fleet_share_percent'] / 100);
     $fleet = self::army($category['fleet_weights'], $fleetBudget, 200, $unitInfo);
     $defence = self::army($category['defence_weights'], $target - $fleetBudget, 400, $unitInfo);
-    $tech = [];
-    foreach ($category['tech'] as $id => $distribution) {
-      $tech[$id] = random_int(max(0, $distribution['mean'] - $distribution['spread']),
-        $distribution['mean'] + $distribution['spread']);
-    }
     $spread = $category['resource_spread_percent'] / 100;
     $resourceRatio = $category['resource_percent'] / 100 * (1 + random_int(-1000000, 1000000) / 1000000 * $spread);
     $equivalent = $fleet['points'] * $resourceRatio;
@@ -113,7 +110,7 @@ class Profile {
       'target_points' => $target, 'garrison_points' => $points,
       'fleet_points' => $fleet['points'], 'defence_points' => $defence['points'],
       'fleet_limit' => (int) floor($points * $limitMultiplier),
-      'fleet' => $fleet['units'], 'defence' => $defence['units'], 'tech' => $tech,
+      'fleet' => $fleet['units'], 'defence' => $defence['units'],
       'resources' => $resources,
     ];
   }
