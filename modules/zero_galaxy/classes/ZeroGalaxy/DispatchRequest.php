@@ -13,6 +13,8 @@ final class DispatchRequest {
   public int $captainId = 0;
   public int $groupId = 0;
   public int $probeCount = 0;
+  public bool $nativeForm = false;
+  public int $planetType = 1;
 
   private function __construct(int $mission, ?int $riftId) {
     $this->mission = $mission;
@@ -35,8 +37,25 @@ final class DispatchRequest {
     return $request;
   }
 
-  public static function recycle(int $system, int $position, int $riftId): self {
-    return self::coordinates(MT_RECYCLE, $system, $position, $riftId);
+  public static function recycle(int $system, int $position, array $ships = [], int $speed = 10, int $sourceId = 0): self {
+    $request = self::coordinates(MT_RECYCLE, $system, $position, null);
+    $request->ships = $ships;
+    $request->speed = $speed;
+    $request->sourceId = $sourceId;
+    return $request;
+  }
+
+  public static function flight(int $system, int $position, int $planetType, int $mission, array $ships,
+    int $speed, int $captainId = 0, int $sourceId = 0, int $groupId = 0): self {
+    $request = self::coordinates($mission === MT_AKS ? MT_ATTACK : $mission, $system, $position, null);
+    $request->nativeForm = true;
+    $request->planetType = $mission === MT_RECYCLE ? PT_DEBRIS : $planetType;
+    $request->ships = AttackPolicy::ships($ships);
+    $request->speed = $speed;
+    $request->captainId = $captainId;
+    $request->sourceId = $sourceId;
+    $request->groupId = $groupId;
+    return $request;
   }
 
   private static function coordinates(int $mission, int $system, int $position, ?int $riftId): self {

@@ -3,7 +3,7 @@
 namespace ZeroGalaxy;
 
 interface FleetDispatchGateway {
-  public function transaction(callable $action);
+  public function transaction(callable $action, DispatchRequest $request = null);
   public function lockTarget(DispatchContext $context, DispatchRequest $request): ?LockedRiftTarget;
   public function cost(LockedRiftTarget $target, array $ships): int;
   public function inventory(LockedRiftTarget $target, int $unitId): int;

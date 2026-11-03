@@ -55,7 +55,7 @@ $a_lang_array = [
   'zero_galaxy_spy_bad_request' => 'Probes can only be sent to active and unstable rifts.',
   'zero_galaxy_spy_missing' => 'This rift is no longer available for espionage. Refresh the universe view.',
   'zero_galaxy_spy_failed' => 'Unable to send probes. Please try again.',
-  'zero_galaxy_recycle_bad_request' => 'Recyclers can only be sent to debris at active and unstable rifts.',
+  'zero_galaxy_recycle_bad_request' => 'Invalid recycler coordinates or fleet composition.',
   'zero_galaxy_recycle_missing' => 'This debris is no longer available for collection. Refresh the universe view.',
   'zero_galaxy_recycle_failed' => 'Unable to send recyclers. Please try again.',
 ];

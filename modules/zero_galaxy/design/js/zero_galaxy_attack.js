@@ -16,6 +16,22 @@
 
     var step = Number(config.step);
     var form = container.querySelector('form');
+    if (config.native) {
+      var nativeDistance = window.distance;
+      if (typeof nativeDistance === 'function') {
+        window.distance = function () {
+          return form && form.elements.galaxy && Number(form.elements.galaxy.value) === 0
+            ? Number(config.distance) : nativeDistance.apply(this, arguments);
+        };
+      }
+      Object.keys(config.fields || {}).forEach(function (name) {
+        var field = document.createElement('input');
+        field.type = 'hidden'; field.name = name; field.value = config.fields[name];
+        form.appendChild(field);
+      });
+      if (step === 1 && typeof window.shortInfo === 'function') { window.shortInfo(); }
+      return;
+    }
     var labels = config.labels;
     var inputs = form ? form.querySelectorAll('input[name^="ships["]') : [];
     var submits = form ? form.querySelectorAll('input[type="submit"],button[type="submit"]') : [];

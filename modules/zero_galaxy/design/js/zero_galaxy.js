@@ -276,7 +276,7 @@
       var request = {
         galaxy: 0, system: Number(window.uni_system), planet: Number(position),
         planet_type: Number(recycle ? config.debrisType : config.planetType),
-        mission: Number(recycle ? config.recycleMission : config.spyMission), rift_id: rift.id
+        mission: Number(recycle ? config.recycleMission : config.spyMission)
       };
       if (!recycle) {
         request.shipcount = Math.max(1, Math.floor(Number(shipcount) || Number(config.spyCount)));

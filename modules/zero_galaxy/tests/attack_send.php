@@ -232,6 +232,8 @@ try {
   // Exercise the AJAX sender itself, not only its arrival/report adapter.
   $_SERVER['REQUEST_METHOD'] = 'POST';
   $_SERVER['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest';
+  $npcPoints = (int) $scalar("SELECT total_points FROM {$prefix}users WHERE id = {$npcId}");
+  $db->query("UPDATE {$prefix}users SET total_points = 1000000 WHERE id = {$npcId}");
   $spySend = function (array $fields = [], bool $useDefault = false) use ($storage, $settings, $riftId) {
     $_POST = array_replace(['galaxy' => '0', 'system' => '1', 'planet' => '1', 'planet_type' => '1',
       'mission' => (string) MT_SPY, 'rift_id' => (string) $riftId, 'shipcount' => '3'], $fields);
@@ -249,7 +251,7 @@ try {
       $message . ': the sender must close only its own transaction');
   };
   foreach ([['galaxy' => '1'], ['mission' => (string) MT_ATTACK], ['planet_type' => '3'],
-    ['system' => '0'], ['planet' => '0'], ['rift_id' => (string) ($riftId + 999)],
+    ['system' => '0'], ['planet' => '0'],
     ['shipcount' => '0'], ['shipcount' => '1.5'], ['shipcount' => ['3']]] as $fields) {
     $spyRejected($fields, 'Invalid reconnaissance request');
   }
@@ -274,18 +276,23 @@ try {
   $db->query("UPDATE {$prefix}planets SET deuterium = 0 WHERE id = {$sourceId}");
   $spyRejected([], 'Reconnaissance without fuel');
   $db->query("UPDATE {$prefix}planets SET deuterium = 1000000000 WHERE id = {$sourceId}");
-  $db->query("UPDATE {$prefix}planets SET id_owner = {$otherId} WHERE id = {$targetId}");
-  $spyRejected([], 'Reconnaissance against changed target ownership');
-  $db->query("UPDATE {$prefix}planets SET id_owner = {$npcId} WHERE id = {$targetId}");
-  foreach (['authlevel' => 1, 'user_bot' => 0, 'parent_account_id' => 12345, 'parent_account_global' => 12345] as $field => $value) {
-    $db->query("UPDATE {$prefix}users SET {$field} = {$value} WHERE id = {$npcId}");
-    $spyRejected([], 'Reconnaissance with an invalid NPC marker: ' . $field);
-    $original = $field === 'user_bot' ? Storage::NPC_BOT_TYPE : 0;
-    $db->query("UPDATE {$prefix}users SET {$field} = {$original} WHERE id = {$npcId}");
-  }
-  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET opens_at = " . (SN_TIME_NOW + 1) . " WHERE rift_id = {$riftId}");
-  $spyRejected([], 'Reconnaissance before the target opens');
-  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET opens_at = {$opens} WHERE rift_id = {$riftId}");
+  $spyRejected(['planet' => '2'], 'Reconnaissance still requires an actual planet');
+  $db->query("UPDATE {$prefix}users SET total_points = 0 WHERE id = {$npcId}");
+  $db->query("UPDATE {$prefix}users SET user_bot = 0 WHERE id = {$npcId}");
+  $spyRejected([], 'Ordinary players must retain native weak-player protection', $lang['fl_attack_error'][ATTACK_NOOB]);
+  $db->query("UPDATE {$prefix}users SET user_bot = " . Storage::NPC_BOT_TYPE . " WHERE id = {$npcId}");
+  $db->query("DELETE FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$npcId}");
+  $spyRejected([], 'A bot marker without module ownership cannot bypass point protection', $lang['fl_attack_error'][ATTACK_NOOB]);
+  $db->query("INSERT INTO {$prefix}zero_galaxy_npcs (owner_id,rift_id) VALUES ({$npcId},{$riftId})");
+  $refresh();
+  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $response = $spySend(['shipcount' => '1']);
+  $check(strpos($response, '|flt_spies=49') !== false
+    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
+    'Registered NPCs with zero ranking points remain available for reconnaissance.');
+  $db->query("UPDATE {$prefix}unit SET unit_level = 50 WHERE unit_location_type = 1
+    AND unit_location_id = {$sourceId} AND unit_snid = " . SHIP_SPY);
+  $db->query("UPDATE {$prefix}users SET total_points = 1000000 WHERE id = {$npcId}");
 
   $probeUnit = (int) $scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_location_type = 1
     AND unit_location_id = {$sourceId} AND unit_snid = " . SHIP_SPY);
@@ -304,12 +311,18 @@ try {
   $spySourceBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
   $spyTargetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}");
   $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
-  $response = $spySend([], true);
+  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at = " . (SN_TIME_NOW - 1)
+    . ", closes_at = " . SN_TIME_NOW . " WHERE rift_id = {$riftId}");
+  $db->query("UPDATE {$prefix}users SET user_bot = 0, parent_account_id = 12345, parent_account_global = 12345 WHERE id = {$npcId}");
+  $response = $spySend(['rift_id' => (string) ($riftId + 999)], true);
+  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at = {$unstable}, closes_at = {$closes} WHERE rift_id = {$riftId}");
+  $db->query("UPDATE {$prefix}users SET user_bot = " . Storage::NPC_BOT_TYPE
+    . ", parent_account_id = 0, parent_account_global = 0 WHERE id = {$npcId}");
   SN::$user_options = $originalUserOptions;
   $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
   $check(strpos($response, '|flt_spies=46') !== false
     && (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
-    'The native default probe count must create exactly one AJAX reconnaissance fleet.');
+    'The native default probe count must launch against an existing planet without consulting rift ID, phase or NPC markers.');
   $check((int) $spyFleet['fleet_mission'] === MT_SPY
     && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 4]
     && (int) $spyFleet['fleet_start_planet_id'] === $sourceId
@@ -355,6 +368,7 @@ try {
   $_POST = [];
   $_SERVER['REQUEST_METHOD'] = 'GET';
   unset($_SERVER['HTTP_X_REQUESTED_WITH']);
+  $db->query("UPDATE {$prefix}users SET total_points = {$npcPoints} WHERE id = {$npcId}");
 
   $captainModule = moduleCaptain();
   $check(is_object($captainModule), 'This integration environment must load the native captain module.');
@@ -524,6 +538,61 @@ try {
   $db->query("UPDATE {$prefix}fleets SET fleet_mess=" . FLEET_STATUS_RETURNING . ' WHERE fleet_id=' . $extraRows[0]);
   $context = \ZeroGalaxy\AcsService::load($groupId, $actorId, $rift, array_replace($settings, ['acs_enabled' => true]));
   $check(count($context['fleets']) === 4, 'A recalled subfleet must not consume a live ACS fleet slot.');
+
+  $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_type=1
+    AND unit_location_id={$sourceId} AND unit_snid IN (" . SHIP_SMALL_FIGHTER_LIGHT . ',' . SHIP_SPY . ')');
+  $db->query("INSERT INTO {$prefix}unit (unit_player_id,unit_location_type,unit_location_id,unit_type,unit_snid,unit_level)
+    VALUES ({$actorId},1,{$sourceId},200," . SHIP_RECYCLER . ',5)');
+  $nativeSend = function (int $mission, array $ships, int $position = 1, int $type = PT_PLANET)
+    use ($settings, $sourceId) {
+    global $user;
+    return (new \ZeroGalaxy\FleetDispatchService(new \ZeroGalaxy\NativeDispatch()))->send(
+      new \ZeroGalaxy\DispatchContext($user, $settings, SN_TIME_NOW),
+      \ZeroGalaxy\DispatchRequest::flight(1,$position,$type,$mission,$ships,10,0,$sourceId));
+  };
+  $rejected(function () use ($nativeSend) { $nativeSend(MT_ATTACK,[SHIP_SMALL_FIGHTER_LIGHT=>11]); },
+    'Native orbital form over-limit attack', 'Такой флот не сможет пролететь через разлом!');
+  $refresh();
+  $nativeAttack=$nativeSend(MT_ATTACK,[SHIP_SMALL_FIGHTER_LIGHT=>10]);
+  $check($nativeAttack->dispatch['fleet_id'] > 0 && $nativeAttack->fleet === [SHIP_SMALL_FIGHTER_LIGHT=>10]
+    && (int) $nativeAttack->target->planet['id'] === $targetId,
+    'The native orbital form must allow an attack exactly at the current rift limit.');
+  foreach ([
+    [MT_ATTACK,2,PT_PLANET,[SHIP_SMALL_FIGHTER_LIGHT=>2]],
+    [MT_SPY,3,PT_PLANET,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_SPY=>2]],
+    [MT_RECYCLE,4,PT_DEBRIS,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>2]],
+  ] as [$mission,$position,$type,$ships]) {
+    $refresh();
+    $beforeSource=$one("SELECT * FROM {$prefix}planets WHERE id={$sourceId}");
+    $result=$nativeSend($mission,$ships,$position,$type);
+    $row=$one("SELECT * FROM {$prefix}fleets WHERE fleet_id=" . $result->dispatch['fleet_id']);
+    $check($row['fleet_end_planet_id'] === null && (int) $row['fleet_target_owner'] === 0
+      && (int) $row['fleet_end_galaxy'] === 0 && (int) $row['fleet_end_planet'] === $position
+      && (int) $row['fleet_end_type'] === $type && sys_unit_str2arr($row['fleet_array']) === $ships,
+      'Native form flights must preserve selected composition and coordinates without inventing a target planet.');
+    $check((int) $result->travel['distance'] === (int) Universe::getBaseGalaxyDistance()
+      && (int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}")
+        === (int) $beforeSource['deuterium']-(int) $result->travel['consumption'],
+      'Every empty-coordinate mission must use and debit the actual fixed-distance flight.');
+  }
+  $refresh();
+  $result=$nativeSend(MT_RECYCLE,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1],1,PT_DEBRIS);
+  $check($result->fleet === [SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1]
+    && (int) $result->target->planet['id'] === $targetId,
+    'Mixed recycler fleets can depart for an existing planet before debris exists.');
+  $rejected(function () use ($nativeSend) { $nativeSend(MT_SPY,[SHIP_SPY=>51],2); },
+    'Native form probe counts must be validated rather than silently clamped');
+  $db->query("UPDATE {$prefix}planets SET deuterium=0 WHERE id={$sourceId}");
+  $rejected(function () use ($nativeSend) { $nativeSend(MT_ATTACK,[SHIP_SMALL_FIGHTER_LIGHT=>1],2); },
+    'Native empty-coordinate attacks still require fuel');
+  $db->query("UPDATE {$prefix}planets SET deuterium=1000000000 WHERE id={$sourceId}");
+  $refresh();
+  for ($i=0,$count=GetMaxFleets($user);$i<$count;$i++) {
+    $db->query("INSERT INTO {$prefix}fleets (fleet_owner,fleet_mission,fleet_start_time,fleet_end_time)
+      VALUES ({$actorId}," . MT_ATTACK . ',' . (SN_TIME_NOW+500) . ',' . (SN_TIME_NOW+1000) . ')');
+  }
+  $rejected(function () use ($nativeSend) { $nativeSend(MT_ATTACK,[SHIP_SMALL_FIGHTER_LIGHT=>1],2); },
+    'Native empty-coordinate attacks still require a fleet slot');
   echo "Attack and spy senders: {$assertions} assertions passed; native helpers used and isolated tables cleaned.\n";
 } finally {
   SN::$db = $originalDb;

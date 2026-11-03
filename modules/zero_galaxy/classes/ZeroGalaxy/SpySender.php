@@ -18,11 +18,9 @@ class SpySender {
     }
     $system = self::integer('system');
     $position = self::integer('planet');
-    $riftId = array_key_exists('rift_id', $_POST) ? self::integer('rift_id') : null;
     if (self::integer('galaxy') !== 0 || self::integer('mission') !== MT_SPY || self::integer('planet_type') !== PT_PLANET
       || $system === null || $system < 1 || $system > (int) SN::$config->game_maxSystem
-      || $position === null || $position < 1 || $position > (int) SN::$config->game_maxPlanet
-      || (array_key_exists('rift_id', $_POST) && ($riftId === null || $riftId < 1))) {
+      || $position === null || $position < 1 || $position > (int) SN::$config->game_maxPlanet) {
       return self::message('zero_galaxy_spy_bad_request', $lang['gs_c02']);
     }
     $requested = array_key_exists('shipcount', $_POST) ? self::integer('shipcount')
@@ -30,7 +28,7 @@ class SpySender {
     if ($requested === null || $requested < 1) { return $lang['fl_attack_error'][ATTACK_NO_SPIES]; }
     try {
       $result = (new FleetDispatchService(new NativeDispatch()))->send(new DispatchContext($user, $settings, SN_TIME_NOW),
-        DispatchRequest::spy($system, $position, $riftId, $requested));
+        DispatchRequest::spy($system, $position, null, $requested));
     } catch (DispatchFailure $error) {
       return $error->nativeError !== null ? $error->translate($lang) : self::message($error->languageKey, $lang['gs_c02']);
     } catch (Throwable $error) {

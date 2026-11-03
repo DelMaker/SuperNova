@@ -112,6 +112,12 @@ try {
       'planet_type' => (string) PT_DEBRIS, 'mission' => (string) MT_RECYCLE, 'rift_id' => (string) $riftId], $overrides);
   };
   $send = function () use ($storage, $settings) { return RecycleSender::send($storage, $settings); };
+  $resetLaunch = function () use ($db, $prefix, $sourceId, $refresh) {
+    $db->query("DELETE FROM {$prefix}fleets");
+    $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
+    $db->query("UPDATE {$prefix}planets SET deuterium=1000000000 WHERE id={$sourceId}");
+    $refresh();
+  };
   $rejected = function (string $message, string $expected = null) use ($send, $state, $check, $scalar) {
     $before = $state();
     $response = $send();
@@ -121,41 +127,49 @@ try {
   };
 
   foreach ([['galaxy' => '1'],['system' => '0'],['planet' => '0'],['planet_type' => PT_PLANET],
-    ['mission' => MT_ATTACK],['rift_id' => '0'],['rift_id' => ['1']],['system' => '1.5']] as $invalid) {
+    ['mission' => MT_ATTACK],['system' => '1.5']] as $invalid) {
     $refresh(); $post($invalid); $rejected('Malformed quick-recycle request');
   }
-  $refresh(); $post(); unset($_POST['rift_id']); $rejected('Missing generation ID');
   $post(); $_SERVER['REQUEST_METHOD']='GET'; $rejected('Non-POST request');
   $post(); unset($_SERVER['HTTP_X_REQUESTED_WITH']); $rejected('Non-AJAX request');
   $post(); SN::$sys_user_logged_in=false; $rejected('Unauthenticated caller');
-  $refresh(); $post(['rift_id' => $riftId + 1]); $rejected('Replaced generation');
-  foreach (['opens_at' => SN_TIME_NOW + 1, 'closes_at' => SN_TIME_NOW] as $field => $value) {
-    $refresh(); $post();
-    if ($field === 'closes_at') {
-      $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at=" . (SN_TIME_NOW-1) . " WHERE rift_id={$riftId}");
-    }
-    $db->query("UPDATE {$prefix}zero_galaxy_rifts SET {$field}={$value} WHERE rift_id={$riftId}");
-    $rejected('Unavailable phase ' . $field);
-    $db->query("UPDATE {$prefix}zero_galaxy_rifts SET {$field}=" . (int) $rift[$field] . " WHERE rift_id={$riftId}");
-    if ($field === 'closes_at') {
-      $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at={$unstable} WHERE rift_id={$riftId}");
-    }
+  foreach ([null, (string) ($riftId + 1000)] as $legacyId) {
+    $resetLaunch(); $post();
+    if ($legacyId === null) { unset($_POST['rift_id']); }
+    else { $_POST['rift_id'] = $legacyId; }
+    $check(strpos($send(), '|flt_recyclers=') !== false, 'Quick recycling must ignore missing or stale generation IDs');
   }
-  foreach (['user_bot' => 0,'authlevel' => 1,'parent_account_id' => 7,'parent_account_global' => 8] as $field => $value) {
-    $refresh(); $post();
-    $old = $scalar("SELECT {$field} FROM {$prefix}users WHERE id={$ownerId}");
-    $db->query("UPDATE {$prefix}users SET {$field}={$value} WHERE id={$ownerId}");
-    $rejected('Invalid NPC marker ' . $field);
-    $db->query("UPDATE {$prefix}users SET {$field}={$old} WHERE id={$ownerId}");
-  }
+  $resetLaunch(); $post();
+  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at=" . (SN_TIME_NOW-1)
+    . ',closes_at=' . SN_TIME_NOW . " WHERE rift_id={$riftId}");
+  $check(strpos($send(), '|flt_recyclers=') !== false, 'A phase deadline must not gate launch toward an existing debris field');
+  $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at={$unstable},closes_at={$closes} WHERE rift_id={$riftId}");
+  $resetLaunch(); $post();
+  $db->query("UPDATE {$prefix}users SET user_bot=0 WHERE id={$ownerId}");
+  $check(strpos($send(), '|flt_recyclers=') !== false, 'Recycling launch must not require NPC identity');
+  $db->query("UPDATE {$prefix}users SET user_bot=" . Storage::NPC_BOT_TYPE . " WHERE id={$ownerId}");
+  $resetLaunch();
   $db->query("UPDATE {$prefix}planets SET debris_metal=0,debris_crystal=0 WHERE id={$targetId}");
   $refresh(); $post(); $rejected('Empty debris field', $lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
+  $post(['ships' => [SHIP_RECYCLER => '3']]);
+  $check(strpos($send(), '|flt_recyclers=47') !== false, 'Explicit recyclers may depart before a battle produces debris');
+  $fleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $check(sys_unit_str2arr($fleet['fleet_array']) === [SHIP_RECYCLER => 3]
+    && (int) $fleet['fleet_end_planet_id'] === $targetId, 'A pre-battle flight retains its chosen composition and current native target');
+  $resetLaunch(); $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '4']]);
+  $check(strpos($send(), '|flt_recyclers=46') !== false, 'Explicit recyclers may depart toward completely empty coordinates');
+  $fleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $check($fleet['fleet_end_planet_id'] === null && (int) $fleet['fleet_target_owner'] === 0
+    && (int) $fleet['fleet_end_system'] === 2 && (int) $fleet['fleet_end_planet'] === 2,
+    'Empty-coordinate flight stores a nullable target link, no invented owner and the requested coordinates');
+  $resetLaunch();
   $db->query("UPDATE {$prefix}planets SET debris_metal=30000,debris_crystal=10000 WHERE id={$targetId}");
   $db->query("UPDATE {$prefix}unit SET unit_level=0 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $refresh(); $post(); $rejected('No available recyclers', $lang['fl_attack_error'][ATTACK_NO_RECYCLERS]);
   $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $db->query("UPDATE {$prefix}planets SET deuterium=0 WHERE id={$sourceId}");
-  $refresh(); $post(); $rejected('No launch fuel', $lang['fl_attack_error'][ATTACK_NO_FUEL]);
+  $refresh(); $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '1']]);
+  $rejected('No launch fuel for an empty-coordinate flight', $lang['fl_attack_error'][ATTACK_NO_FUEL]);
   $db->query("UPDATE {$prefix}planets SET deuterium=1000000000 WHERE id={$sourceId}");
   $db->query("UPDATE {$prefix}users SET vacation=1 WHERE id={$pilot}");
   $refresh(); $post(); $rejected('Native vacation rule', $lang['fl_attack_error'][ATTACK_OWN_VACATION]);
@@ -169,7 +183,8 @@ try {
     $db->query("INSERT INTO {$prefix}fleets (fleet_owner,fleet_mission,fleet_start_time,fleet_end_time)
       VALUES ({$pilot}," . MT_RECYCLE . ',' . (SN_TIME_NOW+500) . ',' . (SN_TIME_NOW+1000) . ')');
   }
-  $rejected('All native fleet slots occupied', $lang['fl_attack_error'][ATTACK_NO_SLOTS]);
+  $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '1']]);
+  $rejected('All native fleet slots occupied for an empty-coordinate flight', $lang['fl_attack_error'][ATTACK_NO_SLOTS]);
   $db->query("DELETE FROM {$prefix}fleets");
   $refresh(); $post(); db_mysql::db_transaction_start();
   $response = $send();

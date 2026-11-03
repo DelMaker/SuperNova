@@ -7,7 +7,7 @@ use RuntimeException;
 use SN;
 
 class AttackPolicy {
-  const OVER_LIMIT = 'Флот слишком большой для этого разлома';
+  const OVER_LIMIT = 'Такой флот не сможет пролететь через разлом!';
   const TOKEN_TTL = 3600;
 
   public static function limit(array $rift): ?int {

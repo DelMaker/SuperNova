@@ -32,12 +32,11 @@ require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftTarget.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftMissionEvent.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
-require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftEspionage.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftSpyEvent.php';
 
 use Fleet\FleetDispatchEvent;
+use Fleet\MissionEspionage;
 use Fleet\MissionEspionageReport;
-use ZeroGalaxy\RiftEspionage;
 use ZeroGalaxy\RiftName;
 use ZeroGalaxy\RiftSpyEvent;
 
@@ -144,7 +143,7 @@ if (($argv[1] ?? '') === '--lifecycle-worker') {
   exit;
 }
 
-class SpyFixtureMission extends RiftEspionage {
+class SpyFixtureMission extends MissionEspionage {
   public $scanned = [];
 
   public function __construct(int $attackerLevel, int $defenderLevel, int $probes, int $satellites, int $ships) {
@@ -175,17 +174,17 @@ class SpyFixtureMission extends RiftEspionage {
 require __DIR__ . '/support/assertions.php';
 
 foreach ([
-  [10, 20, 9, 0, 40, ['fleet', 'tech']],
-  [10, 20, 16, 0, 40, ['fleet', 'defense', 'tech']],
-  [10, 20, 36, 0, 40, ['fleet', 'defense', 'structures', 'tech']],
-  [10, 20, 121, 100, 40, ['fleet', 'defense', 'structures', 'tech']],
-  [10, 21, 9, 0, 40, []],
+  [10, 20, 36, 0, 40, []],
+  [20, 20, 9, 0, 40, ['fleet', 'tech']],
+  [20, 20, 16, 0, 40, ['fleet', 'defense', 'tech']],
+  [20, 20, 36, 0, 40, ['fleet', 'defense', 'structures', 'tech']],
+  [20, 20, 121, 100, 40, ['tech']],
   [0, 0, 1, 0, 0, ['tech']],
 ] as $case) {
   [$attacker, $defender, $probes, $satellites, $ships, $expectedGroups] = $case;
   $mission = new SpyFixtureMission($attacker, $defender, $probes, $satellites, $ships);
   $report = $mission->run();
-  $check($mission->scanned === $expectedGroups, 'Half concealment must select the expected groups at exact thresholds');
+  $check($mission->scanned === $expectedGroups, 'Rift reports must use full native espionage and anti-spy concealment');
   $check($report->targetSpyLevel === $defender && $report->attackerSpyLevel === $attacker, 'Report must retain full actual spy levels');
   $check($report->getEmpireSpyDiff() === $attacker - $defender, 'Native empire difference must remain unchanged');
   $check($report->getDetectionTrashold() == $probes * $ships / 4 * pow(2, $defender - $attacker), 'Detection threshold must use full defender technology');
@@ -205,7 +204,7 @@ foreach ([
 
 // A scan captures the current native planet name. Renaming that planet later
 // must affect new scans without rewriting already serialized message payloads.
-$namedMission = new SpyFixtureMission(10, 20, 36, 0, 40);
+$namedMission = new SpyFixtureMission(20, 20, 36, 0, 40);
 $namedRift = ['config_snapshot' => json_encode(['profile' => ['version' => 1,
   'category' => ['key' => 'tiny', 'name' => 'Крошечный']]], JSON_UNESCAPED_UNICODE)];
 $namedMission->dstPlanetRow['name'] = RiftName::forRift($namedRift, 'active');
@@ -238,7 +237,9 @@ $wrapped = new RiftSpyEvent($nativeEvent, 2);
 foreach (get_object_vars($nativeEvent) as $key => $value) {
   $check($wrapped->$key === $value, 'Event wrapping must preserve native field ' . $key);
 }
-$check($wrapped->fleet['fleet_mission'] === MT_SPY, 'Wrapping must never change the persisted mission type');
+$wrapped->refreshMissionData();
+$check($wrapped->missionId === MT_SPY && $wrapped->fleet['fleet_mission'] === MT_SPY,
+  'Refreshing a spy event must leave both native mission execution and its persisted type intact');
 
 if (getenv('SUPERNOVA_DB_HOST')) {
   mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
@@ -246,59 +247,11 @@ if (getenv('SUPERNOVA_DB_HOST')) {
   $prefix = 'zg_spy_test_' . bin2hex(random_bytes(5)) . '_';
   SN::$db = (object) ['db_prefix' => $prefix, 'link' => $db];
   $table = $prefix . 'zero_galaxy_rifts';
-  $fixtureOwners = [2 => ['id' => 2, 'user_bot' => 200, 'authlevel' => 0, 'parent_account_id' => 0, 'parent_account_global' => 0]];
-  $reflection = new ReflectionClass(RiftSpyEvent::class);
-  $owned = $reflection->getMethod('isModuleTarget');
-  $owned->setAccessible(true);
-  $ownershipEvent = $reflection->newInstanceWithoutConstructor();
-  $legacy = $reflection->getProperty('legacyOwnerId');
-  $legacy->setAccessible(true);
-  $legacy->setValue($ownershipEvent, 2);
-  $moduleLocked = $reflection->getProperty('moduleRecordsLocked');
-  $moduleLocked->setAccessible(true);
-  $lockedRift = $reflection->getProperty('lockedRift');
-  $lockedRift->setAccessible(true);
-  $ownershipCheck = function () use ($db, $table, $lockedRift, $ownershipEvent, $owned): bool {
-    $lockedRift->setValue($ownershipEvent, $db->query("SELECT * FROM {$table} LIMIT 1")->fetch_assoc());
-    return $owned->invoke($ownershipEvent);
-  };
-  $planet = ['id' => 20, 'id_owner' => 2, 'galaxy' => 0, 'system' => 3, 'planet' => 5, 'planet_type' => PT_PLANET];
-  $ownershipEvent->dstPlanetRow = $planet;
   try {
     $db->query("CREATE TABLE {$table} (rift_id INT PRIMARY KEY, planet_id INT, npc_owner_id INT NULL,
       system INT, position INT, born_at BIGINT, opens_at BIGINT, unstable_at BIGINT,
       closes_at BIGINT, disappears_at BIGINT) ENGINE=InnoDB");
     $timeline = (SN_TIME_NOW - 100) . ',' . (SN_TIME_NOW - 1) . ',' . SN_TIME_NOW . ',' . (SN_TIME_NOW + 1) . ',' . (SN_TIME_NOW + 100);
-    $db->query("INSERT INTO {$table} VALUES (1, 20, 2, 3, 5, {$timeline})");
-    $check(!$ownershipCheck(), 'The modifier must not read membership without acquiring module locks first');
-    $moduleLocked->setValue($ownershipEvent, true);
-    $check($ownershipCheck(), 'A live independently owned NPC rift must receive half concealment');
-    $nativeDb = SN::$db;
-    SN::$db = (object) ['link' => new class {
-      public function query($sql) { throw new RuntimeException('Ownership must use its already locked snapshot'); }
-    }];
-    try { $check($owned->invoke($ownershipEvent), 'Ownership checks must not issue another SQL query after taking locks'); }
-    finally { SN::$db = $nativeDb; }
-    $db->query("UPDATE {$table} SET npc_owner_id = NULL");
-    $check($ownershipCheck(), 'Legacy shared-owner rifts must retain module ownership');
-    $legacy->setValue($ownershipEvent, 9);
-    $check(!$ownershipCheck(), 'Legacy null ownership must not match an unrelated NPC');
-    $db->query("UPDATE {$table} SET npc_owner_id = 9");
-    $check(!$ownershipCheck(), 'Another NPC owner must not receive the module modifier');
-    $db->query("UPDATE {$table} SET npc_owner_id = 2, closes_at = " . SN_TIME_NOW);
-    $check(!$ownershipCheck(), 'Closed targets must fall back to native handling');
-    $db->query("UPDATE {$table} SET closes_at = " . (SN_TIME_NOW + 1));
-    $ownershipEvent->dstPlanetRow['galaxy'] = 1;
-    $check(!$ownershipCheck(), 'Ordinary galaxies must remain native');
-    $ownershipEvent->dstPlanetRow = $planet;
-    $fixtureOwners[2]['user_bot'] = 0;
-    $check(!$ownershipCheck(), 'A human owner must never receive the module modifier');
-    $fixtureOwners[2]['user_bot'] = 200;
-    $db->query("DELETE FROM {$table}");
-    $check(!$ownershipCheck(), 'A foreign planet at zero coordinates must remain native');
-    $ownershipEvent->dstPlanetRow = null;
-    $check(!$ownershipCheck(), 'A missing target must retain native probe-return handling');
-
     $db->query("CREATE TABLE {$prefix}zero_galaxy_state (id INT PRIMARY KEY) ENGINE=InnoDB");
     $db->query("INSERT INTO {$prefix}zero_galaxy_state VALUES (1)");
     $db->query("CREATE TABLE {$prefix}users (id INT PRIMARY KEY) ENGINE=InnoDB");

@@ -121,6 +121,7 @@ namespace {
   };
 
   if (in_array($argv[1] ?? '', ['--spy-endpoint', '--recycle-endpoint'], true)) {
+    $_SERVER['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest';
     $module = $fixture(new CustomDispatcher());
     // Populate the world fields deliberately: an unsupported dispatcher must
     // still block the endpoint even if lifecycle state is already available.

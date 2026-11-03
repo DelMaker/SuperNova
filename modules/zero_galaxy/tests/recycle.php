@@ -118,7 +118,12 @@ $run = function (int $id = 77, bool $metadata = true, $event = null) use ($nativ
   $wrapped = new RiftRecycleEvent($event ?? $native($id), 2, $metadata);
   $wrapped->lockEventRecords();
   $wrapped->refreshFleet();
+  if ((int) $wrapped->fleet['fleet_mess'] !== FLEET_STATUS_FLYING) { return $wrapped; }
   $wrapped->refreshMissionData();
+  if ($wrapped->missionId === MT_RECYCLE) {
+    require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_mission_recycle.php';
+    flt_mission_recycle($wrapped);
+  }
   return $wrapped;
 };
 $reset = function (int $metal = 600, int $crystal = 400) use ($db, $prefix, &$messages) {
@@ -175,15 +180,12 @@ try {
   $check((float) $planet['debris_metal'] === 500.0 && (float) $planet['debris_crystal'] === 300.0,
     'Collected cargo must be subtracted from the native planet debris');
   $check((int) $fleet['fleet_mess'] === 1 && (int) $fleet['fleet_mission'] === MT_RECYCLE
-    && $event->missionId === MT_NONE, 'Only the handled event is suppressed; native mission and return are retained');
+    && $event->missionId === MT_RECYCLE, 'Native dispatcher retains the ordinary recycle mission and return');
   $check((int) $fleet['fleet_start_time'] === SN_TIME_NOW && (int) $fleet['fleet_end_time'] === SN_TIME_NOW+100,
     'Collection must preserve native flight timestamps');
   $check(count($messages) === 1 && $messages[0][3] === MSG_TYPE_RECYCLE, 'Native recycler report must be generated once');
   $check($one('zero_galaxy_rifts') === $riftBefore, 'Recycling must not destabilize or reschedule a rift');
   $check($one('planets', 'id=10') === $sourceBefore, 'Collection must not modify an unrelated native planet');
-  $event->refreshMissionData();
-  $check($one('fleets', 'fleet_id=77') === $fleet && $one('planets', 'id=20') === $planet && count($messages) === 1,
-    'Repeated processing of one event must never duplicate cargo or reports');
 
   foreach ([[30,70],[150,0],[0,150],[0,0],[20,600],[600,20]] as [$metal,$crystal]) {
     $reset($metal,$crystal);
@@ -217,42 +219,44 @@ try {
   $check((float) $fleet['fleet_resource_metal']===225.0 && (float) $fleet['fleet_resource_crystal']===75.0,
     'Native cargo sharing must use other ships first and subtract carried goods from recycler capacity');
 
-  foreach (['unstable_at' => SN_TIME_NOW-1, 'closes_at' => SN_TIME_NOW+1] as $column=>$value) {
-    $reset();
-    $db->query("UPDATE {$prefix}zero_galaxy_rifts SET {$column}={$value}");
-    $run();
-    $check((float) $one('fleets','fleet_id=77')['fleet_resource_metal'] === 100.0,
-      'Active and unstable targets must remain collectible until the closing deadline');
-  }
   foreach ([SN_TIME_NOW,SN_TIME_NOW-1] as $closedAt) {
     $reset();
     $db->query("UPDATE {$prefix}zero_galaxy_rifts SET closes_at={$closedAt},unstable_at=" . (SN_TIME_NOW-10) . "");
     $run();
-    $check((float) $one('planets','id=20')['debris_metal'] === 600.0 && !$messages,
-      'At and after closing, even a lingering physical planet must not yield debris');
-    $check((int) $one('fleets','fleet_id=77')['fleet_mess'] === 1,
-      'A recycler arriving at a closed rift must return without collection');
+    $check((float) $one('planets','id=20')['debris_metal'] === 500.0 && count($messages) === 1,
+      'A closing deadline must not change native collection while the planet still exists');
   }
   foreach (['DELETE FROM ' . $prefix . 'zero_galaxy_rifts',
-    'DELETE FROM ' . $prefix . 'planets WHERE id=20',
-    'UPDATE ' . $prefix . 'users SET user_bot=0 WHERE id=3',
-    'UPDATE ' . $prefix . 'zero_galaxy_rifts SET planet_id=10',
-    'UPDATE ' . $prefix . 'fleets SET fleet_group=9 WHERE fleet_id=77',
-    'UPDATE ' . $prefix . 'fleets SET fleet_end_type=1 WHERE fleet_id=77',
-    'UPDATE ' . $prefix . "fleets SET fleet_array='202,2' WHERE fleet_id=77",
-    'UPDATE ' . $prefix . 'fleets SET fleet_resource_metal=201 WHERE fleet_id=77'] as $invalid) {
+    'UPDATE ' . $prefix . 'users SET user_bot=0 WHERE id=3'] as $change) {
     $reset();
-    $db->query($invalid);
-    $planetBefore = $one('planets','id=20');
+    $db->query($change);
     $run();
-    $check((int) $one('fleets','fleet_id=77')['fleet_mess'] === 1 && !$messages,
-      'Invalid target, mission, or overloaded cargo must return without collecting');
-    $check($one('planets','id=20') === $planetBefore, 'Rejected collection must not change debris');
+    $check((float) $one('planets','id=20')['debris_metal'] === 500.0 && count($messages) === 1,
+      'Native collection must not depend on rift registration or NPC identity');
   }
   $reset();
   $run(77,false);
-  $check((float) $one('planets','id=20')['debris_metal'] === 600.0 && !$messages,
-    'Unavailable module metadata must prevent native collection');
+  $check((float) $one('planets','id=20')['debris_metal'] === 500.0 && count($messages) === 1,
+    'Native collection must remain available without module metadata');
+
+  $reset(0,0);
+  $db->query("UPDATE {$prefix}planets SET debris_metal=150,debris_crystal=50 WHERE id=20");
+  $run();
+  $fleet = $one('fleets','fleet_id=77');
+  $check((float) $fleet['fleet_resource_metal'] === 150.0 && (float) $fleet['fleet_resource_crystal'] === 50.0,
+    'A fleet launched before battle must collect debris which appeared while it was flying');
+
+  $reset();
+  $beforeDeletion = $one('fleets','fleet_id=77');
+  $db->query("DELETE FROM {$prefix}planets WHERE id=20");
+  $beforeDeletion['fleet_end_planet_id'] = null;
+  $check($one('fleets','fleet_id=77') === $beforeDeletion,
+    'Deleting a planet must retain inbound recycler composition, cargo and flight times');
+  $run();
+  $fleet = $one('fleets','fleet_id=77');
+  $check((int) $fleet['fleet_mess'] === 1 && (float) $fleet['fleet_resource_metal'] === 0.0
+    && (float) $fleet['fleet_resource_crystal'] === 0.0 && !$messages,
+    'Native arrival at empty coordinates must turn back without collection or a report');
 
   $reset();
   $db->query("DELETE FROM {$prefix}planets WHERE id=20");
@@ -262,7 +266,7 @@ try {
   $check((int) $event->dstPlanetId===21 && in_array(21,$event->planetIdsToLock,true)
     && in_array(4,$event->userIdsToLock,true), 'Replacement target and owner must join native locks before refreshed collection');
   $check((float) $one('planets','id=21')['debris_metal']===500.0,
-    'A valid replacement at the coordinates uses its current debris');
+    'A replacement at the coordinates must yield its current debris regardless of the old rift');
 
   $reset();
   $run();
@@ -271,7 +275,7 @@ try {
   $collected['fleet_end_planet_id']=null;
   $check($one('fleets','fleet_id=77')===$collected, 'Native target FK must clear after closing while retaining returning cargo and timestamps');
   $event=$run();
-  $check($one('fleets','fleet_id=77')===$collected && $event->missionId===MT_NONE,
+  $check($one('fleets','fleet_id=77')===$collected,
     'Already returning fleets must never be collected or redirected a second time');
 
   $reset(150,150);

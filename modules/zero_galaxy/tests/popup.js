@@ -127,11 +127,11 @@ assert.ok(popup.html.includes('60000') && popup.html.includes('40000'), 'Native 
 assert.ok(popup.html.includes('20000') && popup.html.includes('80000'), 'Native debris popup must keep incoming and source capacity figures');
 assert.ok(popup.html.includes('button_pseudo ownharvest') && !popup.html.includes('HIDE_RECYCLER_LINK'), 'Native quick recycle control must remain');
 debris.context.doit(8, 6, 2);
-assert.deepEqual(debris.requests, [{url: '/zero-recycle', request: {galaxy: 0, system: 18, planet: 6, planet_type: 2, mission: 8, rift_id: 543}}]);
+assert.deepEqual(debris.requests, [{url: '/zero-recycle', request: {galaxy: 0, system: 18, planet: 6, planet_type: 2, mission: 8}}]);
 assert.equal(debris.counters.flt_recyclers.textContent, '9007199254740993', 'Response recycler count must retain all digits without Number conversion');
 assert.equal(debris.counters.flt_spies.textContent, '7', 'Collection must not change the probe counter');
 debris.context.doit(6, 6, 1, 3);
-assert.deepEqual(debris.requests[1], {url: '/zero-spy', request: {galaxy: 0, system: 18, planet: 6, planet_type: 1, mission: 6, rift_id: 543, shipcount: 3}});
+assert.deepEqual(debris.requests[1], {url: '/zero-spy', request: {galaxy: 0, system: 18, planet: 6, planet_type: 1, mission: 6, shipcount: 3}});
 assert.equal(debris.counters.flt_spies.textContent, '5', 'Existing reconnaissance must retain its endpoint and counter');
 debris.context.doit(8, 6, 1);
 assert.equal(debris.requests.length, 2, 'Collection must reject a planet target instead of debris');

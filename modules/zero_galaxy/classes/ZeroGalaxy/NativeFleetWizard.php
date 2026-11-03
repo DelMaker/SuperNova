@@ -148,7 +148,7 @@ class NativeFleetWizard {
       $rift, $step, $ships, $targetName, $sourceId, $issuedAt, $acs);
   }
 
-  private function sent(array $result, array $target): void {
+  public function sent(array $result, array $target): void {
     global $lang, $template_result;
     $template = \SnTemplate::gettemplate('fleet3', true);
     $source = $result['source'];
@@ -157,7 +157,7 @@ class NativeFleetWizard {
       'START_COORDS' => uni_render_coordinates($source), 'START_NAME' => $source['name'],
       'START_TIME_TEXT' => date(FMT_DATE_TIME, $result['return_at'] + SN_CLIENT_TIME_DIFF),
       'START_LEFT' => $result['return_at'] + 1 - SN_TIME_NOW,
-      'END_TYPE_TEXT_SH' => $lang['sys_planet_type_sh'][PT_PLANET],
+      'END_TYPE_TEXT_SH' => $lang['sys_planet_type_sh'][$result['mission'] === MT_RECYCLE ? PT_DEBRIS : ($target['planet_type'] ?? PT_PLANET)],
       'END_COORDS' => uni_render_coordinates($target), 'END_NAME' => $target['name'],
       'END_TIME_TEXT' => date(FMT_DATE_TIME, $result['arrival'] + SN_CLIENT_TIME_DIFF),
       'END_LEFT' => $result['arrival'] + 1 - SN_TIME_NOW,

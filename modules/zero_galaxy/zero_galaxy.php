@@ -7,6 +7,7 @@ use ZeroGalaxy\RiftFleetDispatcher;
 use ZeroGalaxy\NPCStatistics;
 use ZeroGalaxy\SpySender;
 use ZeroGalaxy\RecycleSender;
+use ZeroGalaxy\NativeFleetForm;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
 use ZeroGalaxy\AttackView;
@@ -99,6 +100,7 @@ class zero_galaxy extends sn_module {
       return $template;
     }
     $this->routeNativeAcs();
+    NativeFleetForm::intercept();
     $attackCoordinates = AttackLink::nativeCoordinates(INITIAL_PAGE, $_SERVER['REQUEST_METHOD'] ?? '', $_GET,
       max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet));
     $this->updateWorld($attackCoordinates !== null
@@ -168,7 +170,7 @@ class zero_galaxy extends sn_module {
       }
     }
     $groupId = (int) sys_get_param_id('fleet_group');
-    if ($groupId > 0) {
+    if ($groupId > 0 && $page < 2) {
       $group = SN::$db->doquery('SELECT galaxy,system,planet FROM {{aks}} WHERE id=' . $groupId, true);
       if ($group && (int) $group['galaxy'] === 0) {
         if (!AcsPolicy::enabled($this->effectiveSettings())) {
@@ -289,6 +291,7 @@ class zero_galaxy extends sn_module {
       }
     }
     $template = AcsView::decorate($this, $template, $this->effectiveSettings());
+    $template = NativeFleetForm::decorate($this, $template, $this->effectiveSettings());
     return $this->decorateAttack($template);
   }
 
