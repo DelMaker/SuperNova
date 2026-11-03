@@ -4,329 +4,165 @@
   function start() {
     var container = document.getElementById('zero_galaxy_attack');
     var data = document.getElementById('zero_galaxy_attack_data');
-    if (!container || !data) {
-      return;
-    }
+    if (!container || !data) { return; }
     var config;
-    try {
-      config = JSON.parse(data.textContent);
-    } catch (error) {
-      return;
-    }
-
-    var step = Number(config.step);
+    try { config = JSON.parse(data.textContent); } catch (error) { return; }
     var form = container.querySelector('form');
-    if (config.native) {
-      var nativeDistance = window.distance;
-      if (typeof nativeDistance === 'function') {
-        window.distance = function () {
-          return form && form.elements.galaxy && Number(form.elements.galaxy.value) === 0
-            ? Number(config.distance) : nativeDistance.apply(this, arguments);
-        };
-      }
-      Object.keys(config.fields || {}).forEach(function (name) {
-        var field = document.createElement('input');
-        field.type = 'hidden'; field.name = name; field.value = config.fields[name];
-        form.appendChild(field);
-      });
-      if (step === 1 && typeof window.shortInfo === 'function') { window.shortInfo(); }
-      return;
-    }
-    var labels = config.labels;
-    var inputs = form ? form.querySelectorAll('input[name^="ships["]') : [];
-    var submits = form ? form.querySelectorAll('input[type="submit"],button[type="submit"]') : [];
-    var originallyDisabled = [];
-    for (var s = 0; s < submits.length; s++) {
-      originallyDisabled.push(submits[s].disabled);
-    }
+    if (!form) { return; }
+    var step = Number(config.step);
+    var target = config.target;
+    var labels = config.labels || {};
+    var budget = document.getElementById('zero_galaxy_attack_budget');
+    var inputs = form.querySelectorAll('input[name^="ships["]');
+    var submits = Array.prototype.slice.call(form.querySelectorAll('input[type="submit"],button[type="submit"]'));
+    var originallyDisabled = submits.map(function (button) { return button.disabled; });
 
-    var banner = document.createElement('div');
-    banner.className = 'zero-galaxy-attack-budget';
-    banner.style.cssText = 'margin:0.8em 0;';
-    var title = document.createElement('h3');
-    title.appendChild(document.createTextNode(labels.attackTitle + ': '));
-    var target = document.createElement('span');
-    target.textContent = config.targetName || config.coords;
-    if (typeof config.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(config.color)) {
-      target.style.color = config.color;
+    function field(name, fallback) {
+      var element = form.elements.namedItem(name);
+      return element ? element.value : fallback;
     }
-    title.appendChild(target);
-    if (config.targetName && config.coords) {
-      title.appendChild(document.createTextNode(' ' + config.coords));
-    }
-    banner.appendChild(title);
-    if (config.groupName) {
-      var groupName = document.createElement('p');
-      groupName.textContent = config.groupName;
-      banner.appendChild(groupName);
-    }
-    (config.groups || []).forEach(function (group) {
-      var invite = document.createElement('p');
-      var join = document.createElement('a');
-      join.href = group.url;
-      join.textContent = labels.join + ': ' + group.name;
-      invite.appendChild(join);
-      banner.appendChild(invite);
+    Object.keys(config.fields || {}).forEach(function (name) {
+      var element = form.elements.namedItem(name);
+      if (!element) {
+        element = document.createElement('input');
+        element.type = 'hidden'; element.name = name;
+        form.appendChild(element);
+      }
+      element.value = config.fields[name];
     });
-    var table = document.createElement('table');
-    table.style.cssText = 'width:auto;min-width:22em;';
-    banner.appendChild(table);
-    var body = document.createElement('tbody');
-    table.appendChild(body);
-    function metric(label) {
-      var row = body.insertRow();
-      var heading = row.insertCell();
-      heading.className = 'c_l';
-      heading.textContent = label;
-      var value = row.insertCell();
-      value.className = 'c_r';
-      value.style.cssText = 'white-space:nowrap;font-variant-numeric:tabular-nums;';
-      return {row: row, heading: heading, value: value};
-    }
-    var limitMetric = metric(labels.limit);
-    var selectedMetric = metric(labels.selected);
-    var remainingMetric = metric(labels.remaining);
-    var acsArrival = Number(config.groupArrival || 0);
-    var acsArrivalMetric;
-    var acsReturnMetric;
-    if (config.groupId && isFinite(acsArrival) && acsArrival > 0) {
-      acsArrivalMetric = metric(labels.acsArrival);
-      acsReturnMetric = metric(labels.acsReturn);
-      var waitHint = document.createElement('p');
-      waitHint.textContent = labels.acsWait;
-      banner.appendChild(waitHint);
-    }
-    var warning = document.createElement('div');
-    warning.className = 'error';
-    warning.style.marginTop = '0.35em';
-    banner.appendChild(warning);
-    container.insertBefore(banner, form || container.firstChild);
-
-    function setField(name, value) {
-      var field = form.elements.namedItem(name);
-      if (!field || !field.tagName) {
-        field = document.createElement('input');
-        field.type = 'hidden';
-        field.name = name;
-        form.appendChild(field);
-      }
-      field.value = String(value);
-    }
-    if (form) {
-      form.action = config.nextUrl;
-      Object.keys(config.fields || {}).forEach(function (name) {
-        setField(name, config.fields[name]);
-      });
-      var missionFields = form.querySelectorAll('[name="target_mission"]');
-      if (!missionFields.length) {
-        setField('target_mission', config.mission || 1);
-      }
-      for (var m = 0; m < missionFields.length; m++) {
-        if (missionFields[m].type === 'radio') {
-          missionFields[m].checked = missionFields[m].value === String(config.mission || 1);
-        } else {
-          missionFields[m].value = String(config.mission || 1);
-        }
-      }
-      setField('fleet_group', config.groupId || 0);
-      if (step === 1) {
-        var coordinates = String(config.coords).match(/^\[0:(\d+):(\d+)\]$/);
-        ['galaxy', 'system', 'planet'].forEach(function (name, index) {
-          var field = form.elements.namedItem(name);
-          if (field && field.tagName) {
-            field.readOnly = true;
-            if (coordinates) {
-              field.value = index === 0 ? '0' : coordinates[index];
-            }
-          }
-        });
-        var planetType = form.querySelector('select[name="planet_type"]');
-        if (planetType) {
-          planetType.value = '1';
-          planetType.disabled = true;
-          var fixedType = document.createElement('input');
-          fixedType.type = 'hidden';
-          fixedType.name = 'planet_type';
-          fixedType.value = '1';
-          form.appendChild(fixedType);
-        }
-        // The native destination shortcuts must not retarget this rift wizard.
-        var tableIndex = 0;
-        for (var child = 0; child < form.children.length; child++) {
-          if (form.children[child].tagName === 'TABLE' && ++tableIndex === 2) {
-            form.children[child].style.display = 'none';
-          }
-        }
-      }
-    }
-
-    var fixedDistance = Number(config.distance);
-    if (isFinite(fixedDistance) && fixedDistance > 0) {
-      window.distance = function () { return fixedDistance; };
-    }
-
-    function updateAcsTimes() {
-      if (!acsArrivalMetric) { return; }
-      function formatTime(seconds, local) {
-        var date = new Date(seconds * 1000);
-        try {
-          return local ? date.toLocaleString() : date.toLocaleString(undefined, {timeZone: config.serverTimeZone});
-        } catch (error) { return date.toLocaleString(); }
-      }
-      function setTime(id, seconds, local) {
-        var field = document.getElementById(id);
-        if (field) { field.textContent = formatTime(seconds, local); }
-      }
-      acsArrivalMetric.value.textContent = formatTime(acsArrival, false);
-      setTime('time_dst', acsArrival, false);
-      setTime('time_dst_local', acsArrival, true);
-      var speedField = form && form.elements.namedItem('speed');
-      var speed = speedField && speedField.tagName ? String(speedField.value) : '10';
-      var naturalDuration = Number((config.travelDurations || {})[speed] || config.naturalDuration || 0);
-      acsReturnMetric.row.style.display = step > 0 && naturalDuration > 0 ? '' : 'none';
-      if (step > 0 && naturalDuration > 0) {
-        var returnAt = acsArrival + naturalDuration;
-        acsReturnMetric.value.textContent = formatTime(returnAt, false);
-        setTime('time_src', returnAt, false);
-        setTime('time_src_local', returnAt, true);
-      }
-    }
-    var nativeShortInfo = window.shortInfo;
-    if (acsArrivalMetric && typeof nativeShortInfo === 'function') {
-      window.shortInfo = function () {
-        var result = nativeShortInfo.apply(this, arguments);
-        updateAcsTimes();
-        return result;
+    var nativeDistance = window.distance;
+    if (typeof nativeDistance === 'function') {
+      window.distance = function () {
+        return String(field('galaxy', '')).trim() !== '' && Number(field('galaxy')) === 0
+          ? Number(config.distance) : nativeDistance.apply(this, arguments);
       };
     }
 
-    var zero;
-    var limit;
-    var costScale;
-    var decimalPlaces;
-    try {
-      if (typeof BigInt !== 'function' || !/^\d+$/.test(config.limit)
-        || !/^10*$/.test(String(config.costScale || '1'))) {
-        throw new Error('Invalid fleet cost data');
-      }
-      zero = BigInt('0');
-      limit = BigInt(config.limit);
-      costScale = BigInt(config.costScale || '1');
-      decimalPlaces = String(config.costScale || '1').length - 1;
-    } catch (error) {
-      warning.textContent = labels.missing;
-      for (var disabled = 0; disabled < submits.length; disabled++) {
-        submits[disabled].disabled = true;
-      }
-      if (form) {
-        form.addEventListener('submit', function (event) { event.preventDefault(); }, true);
-      }
-      return;
+    function matches(name, expected) {
+      var value = String(field(name, '')).trim();
+      return /^\d+$/.test(value) && Number(value) === Number(expected);
     }
-
+    function applies() {
+      var checked = form.querySelector('[name="target_mission"]:checked');
+      var mission = Number(checked ? checked.value : field('target_mission', config.mission));
+      if (step !== 2 && !mission) {
+        mission = step === 1 && Number(field('fleet_group', 0)) > 0
+          ? Number((config.attackMissions || [])[1]) : Number(config.mission);
+      }
+      return target && (config.attackMissions || []).map(Number).indexOf(mission) >= 0
+        && matches('galaxy', 0) && matches('system', target.system) && matches('planet', target.position)
+        && matches('planet_type', 1) && matches('fleet_group', config.groupId || 0);
+    }
+    function text(id, value) {
+      var element = document.getElementById(id);
+      if (element) { element.textContent = value; }
+    }
     function integer(value) {
-      var text = String(value).trim();
-      return /^\d+$/.test(text) ? BigInt(text) : null;
+      var digits = String(value).trim();
+      if (!/^\d+$/.test(digits)) { throw new Error('Invalid fleet cost data'); }
+      return BigInt(digits);
     }
-    function formatPoints(value) {
-      var text = value.toString();
-      while (text.length <= decimalPlaces) {
-        text = '0' + text;
-      }
-      var whole = decimalPlaces ? text.slice(0, -decimalPlaces) : text;
-      var fraction = decimalPlaces ? text.slice(-decimalPlaces).replace(/0+$/, '') : '';
+    function points(value) {
+      var decimals = String(config.costScale || '1').length - 1;
+      var digits = value.toString();
+      while (digits.length <= decimals) { digits = '0' + digits; }
+      var whole = decimals ? digits.slice(0, -decimals) : digits;
+      var fraction = decimals ? digits.slice(-decimals).replace(/0+$/, '') : '';
       return whole.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0') + (fraction ? '.' + fraction : '') + ' ' + labels.points;
     }
-    limitMetric.value.textContent = formatPoints(limit);
-    var showSelection = step === 0 || !!config.fixedFleet;
-    selectedMetric.row.style.display = remainingMetric.row.style.display = showSelection ? '' : 'none';
-
+    function updateTimes(active) {
+      var arrival = Number(config.groupArrival || 0);
+      var show = active && arrival > 0;
+      var duration = step === 1 && typeof window.duration === 'function'
+        ? Number(window.duration()) : Number(config.naturalDuration || 0);
+      document.getElementById('zero_galaxy_acs_arrival').hidden = !show;
+      document.getElementById('zero_galaxy_acs_return').hidden = !show || duration <= 0;
+      document.getElementById('zero_galaxy_acs_wait').hidden = !show;
+      if (!show) { return; }
+      function format(seconds, local) {
+        return new Date(seconds * 1000).toLocaleString(undefined,
+          local ? undefined : {timeZone: config.serverTimeZone});
+      }
+      text('zero_galaxy_acs_arrival_value', format(arrival));
+      text('zero_galaxy_acs_return_value', format(arrival + duration));
+      ['time_dst', 'time_dst_local', 'time_src', 'time_src_local'].forEach(function (id, index) {
+        text(id, format(index < 2 ? arrival : arrival + duration, index % 2 === 1));
+      });
+    }
     function update() {
-      updateAcsTimes();
-      var selected = zero;
-      var quantity = zero;
-      var invalid = false;
-      function addShip(id, amount, existing) {
-        var count = integer(amount === '' ? '0' : amount);
-        var price = integer((config.unitCosts || {})[id]);
-        if (count === null || (count > zero && price === null)) {
-          invalid = true;
-          return;
-        }
-        if (!existing) { quantity += count; }
-        if (count > zero) {
-          selected += count * price;
-        }
-      }
-      if (step === 0) {
-        for (var i = 0; i < inputs.length; i++) {
-          var match = inputs[i].name.match(/^ships\[(\d+)\]$/);
-          if (match) {
-            addShip(match[1], inputs[i].value);
+      var active = !!applies();
+      budget.hidden = !active;
+      var blocked = false;
+      if (active) {
+        var name = document.getElementById('zero_galaxy_attack_target');
+        name.textContent = target.name + ' [0:' + target.system + ':' + target.position + ']';
+        if (/^#[0-9a-fA-F]{6}$/.test(target.color)) { name.style.color = target.color; }
+        try {
+          if (!/^10*$/.test(String(config.costScale || '1'))) { throw new Error('Invalid fleet cost scale'); }
+          var scale = integer(config.costScale || '1');
+          var limit = integer(target.limit);
+          var selected = integer(0);
+          var quantity = integer(0);
+          function add(id, amount, existing) {
+            var count = integer(amount === '' ? '0' : amount);
+            if (!existing) { quantity += count; }
+            if (count > 0) { selected += count * integer((config.unitCosts || {})[id]); }
           }
+          if (step === 0) {
+            Array.prototype.forEach.call(inputs, function (input) {
+              var match = input.name.match(/^ships\[(\d+)\]$/);
+              if (match) { add(match[1], input.value); }
+            });
+          } else {
+            Object.keys(config.fixedFleet || {}).forEach(function (id) { add(id, config.fixedFleet[id]); });
+          }
+          Object.keys(config.existingFleet || {}).forEach(function (id) { add(id, config.existingFleet[id], true); });
+          selected = selected / scale * scale;
+          var over = selected > limit;
+          text('zero_galaxy_attack_limit', points(limit));
+          text('zero_galaxy_attack_selected_label', labels.selected);
+          text('zero_galaxy_attack_selected', points(selected));
+          text('zero_galaxy_attack_remaining_label', over ? labels.over : labels.remaining);
+          text('zero_galaxy_attack_remaining', points(over ? selected - limit : limit - selected));
+          document.getElementById('zero_galaxy_attack_remaining').className = over ? 'c_r error' : 'c_r';
+          text('zero_galaxy_attack_warning', '');
+          blocked = over || quantity === integer(0);
+        } catch (error) {
+          text('zero_galaxy_attack_warning', labels.missing);
+          blocked = true;
         }
-      } else {
-        Object.keys(config.fixedFleet || {}).forEach(function (id) { addShip(id, config.fixedFleet[id]); });
       }
-      Object.keys(config.existingFleet || {}).forEach(function (id) { addShip(id, config.existingFleet[id], true); });
-      // Match the server: retain fractional unit costs, then floor the total once.
-      selected = selected / costScale * costScale;
-      var over = selected > limit;
-      selectedMetric.value.textContent = formatPoints(selected);
-      remainingMetric.heading.textContent = over ? labels.over : labels.remaining;
-      remainingMetric.value.textContent = formatPoints(over ? selected - limit : limit - selected);
-      remainingMetric.value.className = over || invalid ? 'c_r error' : 'c_r';
-      warning.textContent = invalid ? labels.missing : '';
-      var blocked = showSelection && (over || invalid || quantity === zero);
-      for (var button = 0; button < submits.length; button++) {
-        submits[button].disabled = originallyDisabled[button] || blocked;
-      }
+      updateTimes(active);
+      submits.forEach(function (button, index) { button.disabled = originallyDisabled[index] || blocked; });
       return blocked;
     }
     var scheduled = false;
-    function scheduleUpdate() {
+    function schedule() {
       if (!scheduled) {
         scheduled = true;
         window.setTimeout(function () { scheduled = false; update(); }, 0);
       }
     }
-    if (form) {
-      form.addEventListener('input', scheduleUpdate);
-      form.addEventListener('change', scheduleUpdate);
-      form.addEventListener('keyup', scheduleUpdate);
-      form.addEventListener('click', scheduleUpdate);
-      form.addEventListener('submit', function (event) {
-        setField('fleet_group', config.groupId || 0);
-        if (update()) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-        }
-      }, true);
-    }
-    var nativeStats = window.fl_calc_stats;
-    if (step === 0 && typeof nativeStats === 'function') {
-      window.fl_calc_stats = function () {
-        var result = nativeStats.apply(this, arguments);
-        if (!window.fleet_global_update) {
-          update();
-        }
+    ['input', 'change', 'click'].forEach(function (event) { form.addEventListener(event, schedule); });
+    form.addEventListener('submit', function (event) {
+      if (update()) { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, true);
+    ['shortInfo', 'fl_calc_stats'].forEach(function (name) {
+      var native = window[name];
+      if (typeof native !== 'function') { return; }
+      window[name] = function () {
+        var result = native.apply(this, arguments);
+        if (!window.fleet_global_update) { update(); }
         return result;
       };
-      if (window.jQuery) {
-        window.jQuery(container).find('[id^="ships"][id$="slide"]').on('slide.zeroGalaxyAttack slidechange.zeroGalaxyAttack', scheduleUpdate);
-      }
-      if (document.getElementById('int_fleet_capacity')) {
-        window.fl_calc_stats();
-      }
-    } else if (step === 1 && typeof window.shortInfo === 'function') {
-      window.shortInfo();
+    });
+    if (window.jQuery && step === 0) {
+      window.jQuery(container).find('[id^="ships"][id$="slide"]').on('slide.zeroGalaxyAttack slidechange.zeroGalaxyAttack', schedule);
     }
-    update();
+    if (step === 1 && typeof window.shortInfo === 'function') { window.shortInfo(); }
+    else { update(); }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start);
-  } else {
-    start();
-  }
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', start); }
+  else { start(); }
 }());

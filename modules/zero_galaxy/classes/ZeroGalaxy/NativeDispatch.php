@@ -27,7 +27,7 @@ class NativeDispatch implements FleetDispatchGateway {
       throw new RuntimeException('Zero Galaxy dispatch cannot start in the current database context');
     }
     // Discover native IDs before SERIALIZABLE reads can lock a planet before its owner.
-    $this->coordinateDestination = $request && ($request->nativeForm || in_array($request->mission, [MT_SPY, MT_RECYCLE], true))
+    $this->coordinateDestination = $request
       ? DBStaticPlanet::db_planet_by_gspt(0, $request->system, $request->position,
         $request->planetType === PT_MOON ? PT_MOON : PT_PLANET) : null;
     db_mysql::db_transaction_start();
@@ -44,34 +44,7 @@ class NativeDispatch implements FleetDispatchGateway {
   public function lockTarget(DispatchContext $context, DispatchRequest $request): ?LockedRiftTarget {
     $prefix = $this->prefix;
     $state = $this->db->doquery("SELECT * FROM `{$prefix}zero_galaxy_state` WHERE id = 1 FOR UPDATE", true);
-    if ($request->nativeForm || $request->mission === MT_SPY || $request->mission === MT_RECYCLE) {
-      return $state ? $this->lockCoordinateTarget($context, $request) : null;
-    }
-    $selector = $request->mission === MT_ATTACK ? 'rift_id=' . (int) $request->riftId
-      : 'system=' . $request->system . ' AND position=' . $request->position;
-    $rift = $this->db->doquery("SELECT * FROM `{$prefix}zero_galaxy_rifts` WHERE {$selector} FOR UPDATE", true);
-    if (!$state || !$rift || empty($rift['planet_id'])
-      || ($request->riftId !== null && $request->riftId !== (int) $rift['rift_id'])
-      || !in_array(Lifecycle::phase($rift, $context->now), ['active', 'unstable'], true)) {
-      return null;
-    }
-    $sourceId = $request->sourceId ?: (int) $context->actor['current_planet'];
-    $ownerId = RiftTarget::ownerId($rift, (int) $state['npc_owner_id']);
-    $targetId = (int) $rift['planet_id'];
-    $group = $request->groupId ? AcsService::group($request->groupId,
-      (int) $context->actor['id'], $rift, $context->settings, true) : null;
-    $owners = [(int) $context->actor['id'], $ownerId];
-    if ($group) { $owners = array_merge($owners, array_map('intval', explode(',', $group['eingeladen']))); }
-    SN::$gc->db->lockRecords(['users' => array_values(array_unique($owners)), 'planets' => [$sourceId, $targetId]]);
-    // The legacy fleet helpers read the current player from the global scope.
-    $GLOBALS['user'] = $actor = db_user_by_id($context->actor['id'], true);
-    $source = DBStaticPlanet::db_planet_by_id($sourceId, true);
-    $planet = DBStaticPlanet::db_planet_by_id($targetId, true);
-    $npc = db_user_by_id($ownerId, true);
-    if (!$source || (int) $source['id_owner'] !== (int) $actor['id']
-      || !RiftTarget::matches($rift, $planet, $npc, (int) $state['npc_owner_id'], $context->now)) { return null; }
-    $acs = $group ? AcsService::load($request->groupId, (int) $actor['id'], $rift, $context->settings, true) : null;
-    return new LockedRiftTarget($actor, $source, $planet, $rift, $acs);
+    return $state ? $this->lockCoordinateTarget($context, $request) : null;
   }
 
   private function lockCoordinateTarget(DispatchContext $context, DispatchRequest $request): ?LockedRiftTarget {
@@ -207,7 +180,7 @@ class NativeDispatch implements FleetDispatchGateway {
       'fleet_end_time' => $returnAt, 'fleet_end_planet_id' => $planet['id'] ? (int) $planet['id'] : null,
       'fleet_end_galaxy' => 0, 'fleet_end_system' => (int) $planet['system'],
       'fleet_end_planet' => (int) $planet['planet'],
-      'fleet_end_type' => $mission === MT_RECYCLE ? PT_DEBRIS : ($request->nativeForm ? $request->planetType : PT_PLANET),
+      'fleet_end_type' => $request->planetType,
       'fleet_target_owner' => (int) $planet['id_owner'], 'fleet_group' => $groupId, 'start_time' => $now,
     ]);
     if (!$fleetId) { throw new RuntimeException('Zero Galaxy fleet was not created'); }

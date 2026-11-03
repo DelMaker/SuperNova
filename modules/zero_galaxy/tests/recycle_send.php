@@ -155,24 +155,23 @@ try {
   $db->query("UPDATE {$prefix}planets SET debris_metal=0,debris_crystal=0 WHERE id={$targetId}");
   $refresh(); $post(); $rejected('Empty debris field', $lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
   $post(['ships' => [SHIP_RECYCLER => '3']]);
-  $check(strpos($send(), '|flt_recyclers=47') !== false, 'Explicit recyclers may depart before a battle produces debris');
+  $rejected('Explicit recyclers require an existing debris field', $lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
+  $resetLaunch(); $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '4']]);
+  $rejected('Explicit recyclers require an existing target planet', $lang['fl_attack_error'][ATTACK_NO_TARGET]);
+  $db->query("UPDATE {$prefix}planets SET debris_metal=30000,debris_crystal=10000 WHERE id={$targetId}");
+  $refresh(); $post(['ships' => [SHIP_RECYCLER => '3']]);
+  $check(strpos($send(), '|flt_recyclers=47') !== false, 'Explicit recyclers can depart for an existing debris field');
   $fleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
   $check(sys_unit_str2arr($fleet['fleet_array']) === [SHIP_RECYCLER => 3]
-    && (int) $fleet['fleet_end_planet_id'] === $targetId, 'A pre-battle flight retains its chosen composition and current native target');
-  $resetLaunch(); $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '4']]);
-  $check(strpos($send(), '|flt_recyclers=46') !== false, 'Explicit recyclers may depart toward completely empty coordinates');
-  $fleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
-  $check($fleet['fleet_end_planet_id'] === null && (int) $fleet['fleet_target_owner'] === 0
-    && (int) $fleet['fleet_end_system'] === 2 && (int) $fleet['fleet_end_planet'] === 2,
-    'Empty-coordinate flight stores a nullable target link, no invented owner and the requested coordinates');
+    && (int) $fleet['fleet_end_planet_id'] === $targetId && (int) $fleet['fleet_end_type'] === PT_DEBRIS,
+    'A valid explicit recycling flight preserves its composition and debris destination type');
   $resetLaunch();
-  $db->query("UPDATE {$prefix}planets SET debris_metal=30000,debris_crystal=10000 WHERE id={$targetId}");
   $db->query("UPDATE {$prefix}unit SET unit_level=0 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $refresh(); $post(); $rejected('No available recyclers', $lang['fl_attack_error'][ATTACK_NO_RECYCLERS]);
   $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $db->query("UPDATE {$prefix}planets SET deuterium=0 WHERE id={$sourceId}");
-  $refresh(); $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '1']]);
-  $rejected('No launch fuel for an empty-coordinate flight', $lang['fl_attack_error'][ATTACK_NO_FUEL]);
+  $refresh(); $post(['ships' => [SHIP_RECYCLER => '1']]);
+  $rejected('No launch fuel for selected recyclers', $lang['fl_attack_error'][ATTACK_NO_FUEL]);
   $db->query("UPDATE {$prefix}planets SET deuterium=1000000000 WHERE id={$sourceId}");
   $db->query("UPDATE {$prefix}users SET vacation=1 WHERE id={$pilot}");
   $refresh(); $post(); $rejected('Native vacation rule', $lang['fl_attack_error'][ATTACK_OWN_VACATION]);
@@ -186,8 +185,8 @@ try {
     $db->query("INSERT INTO {$prefix}fleets (fleet_owner,fleet_mission,fleet_start_time,fleet_end_time)
       VALUES ({$pilot}," . MT_RECYCLE . ',' . (SN_TIME_NOW+500) . ',' . (SN_TIME_NOW+1000) . ')');
   }
-  $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '1']]);
-  $rejected('All native fleet slots occupied for an empty-coordinate flight', $lang['fl_attack_error'][ATTACK_NO_SLOTS]);
+  $post(['ships' => [SHIP_RECYCLER => '1']]);
+  $rejected('All native fleet slots occupied for selected recyclers', $lang['fl_attack_error'][ATTACK_NO_SLOTS]);
   $db->query("DELETE FROM {$prefix}fleets");
   $refresh(); $post(); db_mysql::db_transaction_start();
   $response = $send();

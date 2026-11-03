@@ -14,15 +14,6 @@ class AcsService {
       $storage ? [$storage, 'findActive'] : null);
   }
 
-  public static function token(int $userId, int $sourceId, int $riftId, int $issuedAt, int $groupId): string {
-    return (new AcsTokens(SN::$sn_secret_word))->join($userId, $sourceId, $riftId, $issuedAt, $groupId);
-  }
-
-  public static function validToken($token, int $userId, int $sourceId, int $riftId, int $issuedAt,
-    int $groupId, int $now): bool {
-    return (new AcsTokens(SN::$sn_secret_word))->validJoin($token, $userId, $sourceId, $riftId, $issuedAt, $groupId, $now);
-  }
-
   public static function invited(array $group, int $userId): bool { return AcsPolicy::invited($group, $userId); }
 
   private static function translated(callable $operation) {

@@ -25,7 +25,7 @@ namespace {
   define('SN_ROOT_RELATIVE', '');
   define('SN_ROOT_VIRTUAL', '/');
   define('PT_PLANET', 1); define('PT_MOON', 3); define('PT_DEBRIS', 2);
-  define('MT_SPY', 6); define('MT_RECYCLE', 8); define('MT_COLONIZE', 7); define('MT_EXPLORE', 15);
+  define('MT_ATTACK', 1); define('MT_SPY', 6); define('MT_RECYCLE', 8); define('MT_COLONIZE', 7); define('MT_EXPLORE', 15);
   define('P_CAPACITY', 'capacity'); define('SHIP_SPY', 210); define('RES_DEUTERIUM', 903);
   define('FLEET_STATUS_FLYING', 0);
   define('PLAYER_OPTION_FLEET_SPY_DEFAULT', 1);

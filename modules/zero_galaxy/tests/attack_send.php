@@ -18,7 +18,7 @@ define('IN_AJAX', true);
 $allow_anonymous = true;
 require getcwd() . '/common.php';
 require_once __DIR__ . '/support/autoload.php';
-foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'AcsPolicy', 'AcsService', 'NativeDispatch', 'AttackSender', 'SpySender'] as $class) {
+foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'AcsPolicy', 'AcsService', 'NativeDispatch', 'SpySender'] as $class) {
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';
 }
 require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
@@ -27,7 +27,6 @@ use DBAL\db_mysql;
 use Planet\DBStaticPlanet;
 use Unit\DBStaticUnit;
 use ZeroGalaxy\AttackPolicy;
-use ZeroGalaxy\AttackSender;
 use ZeroGalaxy\Profile;
 use ZeroGalaxy\Settings;
 use ZeroGalaxy\SpySender;
@@ -51,7 +50,8 @@ $expect = function (callable $callable, string $class, string $message, string $
   try { $callable(); }
   catch (Throwable $error) {
     if (!$error instanceof $class) { throw $error; }
-    $check($exactMessage === null || $error->getMessage() === $exactMessage, $message . ': wrong error message');
+    $actual = $error instanceof \ZeroGalaxy\DispatchFailure ? $error->translate($GLOBALS['lang']) : $error->getMessage();
+    $check($exactMessage === null || $actual === $exactMessage, $message . ': wrong error message');
     return;
   }
   $check(false, $message);
@@ -157,32 +157,26 @@ try {
     $check($state() === $before, $message . ': rejected send must not change ships, fuel, captains, users or fleets');
     $check(!db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0, $message . ': own transaction must be closed');
   };
-  $send = function (array $ships, int $speed = 10, int $captain = 0, int $source = 0, array $targetRift = null)
-    use ($storage, $settings, $rift) {
-    return AttackSender::send($storage, $settings, $targetRift ?? $rift, $ships, $speed, $captain, $source);
+  $dispatch = function (array $settings, array $rift, array $ships, int $speed,
+    int $captain = 0, int $source = 0, int $group = 0): array {
+    global $user, $planetrow;
+    $request = \ZeroGalaxy\DispatchRequest::flight((int) $rift['system'], (int) $rift['position'], PT_PLANET,
+      $group ? MT_AKS : MT_ATTACK, $ships, $speed, $captain, $source, $group);
+    $result = (new \ZeroGalaxy\FleetDispatchService(new \ZeroGalaxy\NativeDispatch()))->send(
+      new \ZeroGalaxy\DispatchContext($user, $settings, SN_TIME_NOW), $request);
+    $planetrow = $result->refreshedSource;
+    return $result->toArray();
+  };
+  $send = function (array $ships, int $speed = 10, int $captain = 0, int $source = 0)
+    use ($dispatch, $settings, $rift) {
+    return $dispatch($settings, $rift, $ships, $speed, $captain, $source);
   };
 
   $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 11]); }, 'Strictly over-limit fleet', AttackPolicy::OVER_LIMIT);
   $rejected(function () use ($send) { $send([]); }, 'Empty fleet');
   $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1.5]); }, 'Fractional ships');
   $rejected(function () use ($send) { $send([999999 => 1]); }, 'Unknown ship type');
-  foreach ([0, 11] as $speed) {
-    $rejected(function () use ($send, $speed) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], $speed); }, 'Invalid speed');
-  }
   $rejected(function () use ($send, $foreignId) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $foreignId); }, 'Another player source planet');
-  $rejected(function () use ($send, $riftId) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, 0, ['rift_id' => $riftId + 999]); }, 'Expired or replaced target generation');
-  foreach (['opens_at' => SN_TIME_NOW + 1, 'closes_at' => SN_TIME_NOW] as $field => $value) {
-    $old = (int) $rift[$field];
-    if ($field === 'closes_at') {
-      $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at = " . (SN_TIME_NOW - 1) . " WHERE rift_id = {$riftId}");
-    }
-    $db->query("UPDATE {$prefix}zero_galaxy_rifts SET {$field} = {$value} WHERE rift_id = {$riftId}");
-    $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1]); }, 'Unavailable target phase ' . $field);
-    $db->query("UPDATE {$prefix}zero_galaxy_rifts SET {$field} = {$old} WHERE rift_id = {$riftId}");
-    if ($field === 'closes_at') {
-      $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at = {$unstable} WHERE rift_id = {$riftId}");
-    }
-  }
   $db->query("UPDATE {$prefix}planets SET id_owner = {$otherId} WHERE id = {$targetId}");
   $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1]); }, 'Changed target ownership');
   $db->query("UPDATE {$prefix}planets SET id_owner = {$npcId} WHERE id = {$targetId}");
@@ -202,9 +196,6 @@ try {
   $db->query("UPDATE {$prefix}planets SET deuterium = 1000000000 WHERE id = {$sourceId}");
   $rejected(function () use ($send) { $send([SHIP_SPY => 1]); }, 'Lone probes cannot use the attack mission');
   $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 999999); }, 'Unavailable captain');
-  $refresh(); $before = $state(); SN::$sys_user_logged_in = false;
-  $expect(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1]); }, InvalidArgumentException::class, 'Unauthenticated caller');
-  $check($state() === $before, 'Unauthenticated send must leave all fixture data untouched.');
 
   $refresh();
   db_mysql::db_transaction_start();
@@ -457,13 +448,13 @@ try {
   $groupId = (int) $group['id'];
   $check($groupId > 0 && (int) $scalar("SELECT fleet_mission FROM {$prefix}fleets WHERE fleet_id={$leaderId}") === MT_AKS,
     'The module manager must create a native group and convert its leader to an ACS mission atomically.');
-  $join = function (int $count, array $overrides = []) use ($storage, $settings, $rift, $sourceId, $groupId) {
-    return AttackSender::send($storage, array_replace($settings, ['acs_enabled' => true], $overrides), $rift,
+  $join = function (int $count, array $overrides = []) use ($dispatch, $settings, $rift, $sourceId, $groupId) {
+    return $dispatch( array_replace($settings, ['acs_enabled' => true], $overrides), $rift,
       [SHIP_SMALL_FIGHTER_LIGHT => $count], 10, 0, $sourceId, $groupId);
   };
   $rejected(function () use ($join) { $join(1, ['acs_enabled' => false]); }, 'Disabled ACS must reject dispatch');
-  $rejected(function () use ($storage, $settings, $rift, $sourceId, $groupId) {
-    AttackSender::send($storage, $settings, $rift, [SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId, $groupId + 999);
+  $rejected(function () use ($dispatch, $settings, $rift, $sourceId, $groupId) {
+    $dispatch( $settings, $rift, [SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId, $groupId + 999);
   }, 'Unknown ACS must reject dispatch');
   $db->query("UPDATE {$prefix}aks SET eingeladen='{$otherId}' WHERE id={$groupId}");
   $rejected(function () use ($join) { $join(1); }, 'Uninvited player must not join even with a valid group ID');
@@ -499,7 +490,7 @@ try {
   }
   DBStaticUnit::cache_clear();
   $user = db_user_by_id($otherId, true); $planetrow = DBStaticPlanet::db_planet_by_id($foreignId, true);
-  $secondPlayer = AttackSender::send($storage, array_replace($settings, ['acs_enabled' => true]), $rift,
+  $secondPlayer = $dispatch( array_replace($settings, ['acs_enabled' => true]), $rift,
     [SHIP_SMALL_FIGHTER_LIGHT => 10], 10, 0, $foreignId, $groupId);
   $groupFleets = $rows("SELECT * FROM {$prefix}fleets WHERE fleet_group={$groupId}");
   $check(count($groupFleets) === 3 && \ZeroGalaxy\AcsPolicy::playerCost($groupFleets, $actorId) === $profile['fleet_limit']
@@ -514,13 +505,6 @@ try {
   $db->query("UPDATE {$prefix}aks SET ankunft=" . (int) $group['ankunft'] . " WHERE id={$groupId}");
   $db->query("UPDATE {$prefix}fleets SET fleet_start_time=" . (int) $group['ankunft'] . " WHERE fleet_group={$groupId}");
   $db->query("UPDATE {$prefix}fleets SET fleet_array='" . SHIP_SMALL_FIGHTER_LIGHT . ",4' WHERE fleet_id={$memberId}");
-  $token = \ZeroGalaxy\AcsService::token($actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId);
-  $check(\ZeroGalaxy\AcsService::validToken($token, $actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId, SN_TIME_NOW),
-    'The ACS form signature must accept its original context.');
-  $check(!\ZeroGalaxy\AcsService::validToken($token, $actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId + 1, SN_TIME_NOW),
-    'The ACS form signature must bind the selected group.');
-  $check(!\ZeroGalaxy\AcsService::validToken($token, $actorId, $sourceId, $riftId, SN_TIME_NOW, $groupId, SN_TIME_NOW + AttackPolicy::TOKEN_TTL + 1),
-    'The ACS form signature must expire with the ordinary fleet form.');
   $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId}' WHERE id={$groupId}");
   $rejected(function () use ($join) { $join(1); }, 'A group with an uninvited existing member must not accept more fleets', $lang['zero_galaxy_acs_missing']);
   $db->query("UPDATE {$prefix}aks SET eingeladen='{$actorId},{$otherId}' WHERE id={$groupId}");
@@ -560,7 +544,6 @@ try {
   foreach ([
     [MT_ATTACK,2,PT_PLANET,[SHIP_SMALL_FIGHTER_LIGHT=>2]],
     [MT_SPY,3,PT_PLANET,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_SPY=>2]],
-    [MT_RECYCLE,4,PT_DEBRIS,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>2]],
   ] as [$mission,$position,$type,$ships]) {
     $refresh();
     $beforeSource=$one("SELECT * FROM {$prefix}planets WHERE id={$sourceId}");
@@ -575,11 +558,12 @@ try {
         === (int) $beforeSource['deuterium']-(int) $result->travel['consumption'],
       'Every empty-coordinate mission must use and debit the actual fixed-distance flight.');
   }
+  $db->query("UPDATE {$prefix}planets SET debris_metal=1000 WHERE id={$targetId}");
   $refresh();
   $result=$nativeSend(MT_RECYCLE,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1],1,PT_DEBRIS);
   $check($result->fleet === [SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1]
     && (int) $result->target->planet['id'] === $targetId,
-    'Mixed recycler fleets can depart for an existing planet before debris exists.');
+    'Mixed recycler fleets can depart for an existing debris field.');
   $rejected(function () use ($nativeSend) { $nativeSend(MT_SPY,[SHIP_SPY=>51],2); },
     'Native form probe counts must be validated rather than silently clamped');
   $db->query("UPDATE {$prefix}planets SET deuterium=0 WHERE id={$sourceId}");

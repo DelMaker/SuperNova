@@ -38,6 +38,15 @@ class NativeTemplateAdapter {
     }
   }
 
+  public function escapeFleetNames(): void {
+    $this->mapRows('fleets', static function (array $row): array {
+      foreach (['START_NAME', 'END_NAME'] as $key) {
+        if (isset($row[$key])) { $row[$key] = htmlspecialchars($row[$key], ENT_QUOTES, 'UTF-8'); }
+      }
+      return $row;
+    });
+  }
+
   public function wrap($module, string $name) {
     $this->template->files = $this->template->filename = $this->template->files_inherit = [];
     return $module->addModuleTemplate($name, $this->template);

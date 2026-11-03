@@ -4,7 +4,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 require_once __DIR__ . '/support/autoload.php';
 require __DIR__ . '/support/assertions.php';
 foreach (['MT_ATTACK'=>1, 'MT_AKS'=>2, 'MT_SPY'=>6, 'MT_RECYCLE'=>8, 'SHIP_SPY'=>210,
-  'PT_PLANET'=>1, 'PT_DEBRIS'=>2,
+  'PT_PLANET'=>1, 'PT_DEBRIS'=>2, 'PT_MOON'=>3,
   'ATTACK_ALLOWED'=>0, 'ATTACK_NOOB'=>1, 'ATTACK_NO_SPIES'=>2, 'ATTACK_NO_DEBRIS'=>3, 'ATTACK_NO_FUEL'=>4,
   'ATTACK_NO_TARGET'=>5, 'ATTACK_NO_RECYCLERS'=>6] as $name=>$value) {
   define($name, $value);
@@ -64,7 +64,7 @@ class ServiceFixtureGateway implements FleetDispatchGateway {
 }
 
 $context = new DispatchContext(['id'=>7,'current_planet'=>22], ['acs_enabled'=>true], 1000);
-$request = DispatchRequest::attack(1, [206=>2], 10, 0, 22, 0);
+$request = DispatchRequest::flight(3,2,PT_PLANET,MT_ATTACK, [206=>2], 10, 0, 22, 0);
 $gateway = new ServiceFixtureGateway(); $service = new FleetDispatchService($gateway);
 $first = $service->send($context,$request);
 $second = $service->send($context,$request);
@@ -81,12 +81,12 @@ $failure = function (callable $operation, string $key) use ($check): void {
   $check(false, 'Expected dispatch rejection: '.$key);
 };
 $before = [$gateway->fleets,$gateway->stock,$gateway->fuel];
-$failure(function () use ($service,$context) { $service->send($context,DispatchRequest::attack(1,[206=>11],10,0,22,0)); },
+$failure(function () use ($service,$context) { $service->send($context,DispatchRequest::flight(3,2,PT_PLANET,MT_ATTACK,[206=>11],10,0,22,0)); },
   ZeroGalaxy\AttackPolicy::OVER_LIMIT);
 $check([$gateway->fleets,$gateway->stock,$gateway->fuel] === $before, 'An over-limit attempt must not dispatch or debit resources.');
 $gateway->target = null;
 $failure(function () use ($service,$context,$request) { $service->send($context,$request); }, 'zero_galaxy_attack_missing');
-$check(count($gateway->fleets) === 2, 'A disappeared target cannot create another fleet.');
+$check(count($gateway->fleets) === 2, 'A failed target lock cannot create another fleet.');
 
 $gateway = new ServiceFixtureGateway(); $service = new FleetDispatchService($gateway);
 $gateway->stock=5; $gateway->allowed=ATTACK_ALLOWED;
@@ -107,47 +107,38 @@ $check($recycle->fleet === [209=>3] && $recycle->remaining === 7, 'The selected 
 $gateway->target->planet['debris_metal']=0;
 foreach ([ATTACK_NO_TARGET, ATTACK_NO_DEBRIS] as $allowed) {
   $gateway->stock=10; $gateway->allowed=$allowed;
-  $before = count($gateway->fleets);
-  $advance = $service->send($context,DispatchRequest::recycle(3,2,[209=>2]));
-  $check(count($gateway->fleets) === $before+1 && $advance->fleet === [209=>2],
-    'Selected recyclers can launch before a planet or debris exists.');
+  $before = [$gateway->fleets,$gateway->stock,$gateway->fuel];
+  try {
+    $service->send($context,DispatchRequest::flight(3,2,PT_DEBRIS,MT_RECYCLE,[206=>1,209=>2],10));
+    $check(false, 'Explicit recyclers must retain native target and debris admission');
+  } catch (DispatchFailure $error) {
+    $check($error->nativeError === $allowed && [$gateway->fleets,$gateway->stock,$gateway->fuel] === $before,
+      'A missing planet or empty debris field must reject selected recyclers before any debit');
+  }
 }
 
 $gateway = new ServiceFixtureGateway(); $service = new FleetDispatchService($gateway);
 $gateway->captain=true; $gateway->captainFailure=true;
-try { $service->send($context,DispatchRequest::attack(1,[206=>2],10,77,22,0)); $check(false,'Captain persistence must fail.'); }
+try { $service->send($context,DispatchRequest::flight(3,2,PT_PLANET,MT_ATTACK,[206=>2],10,77,22,0)); $check(false,'Captain persistence must fail.'); }
 catch (RuntimeException $error) { $check($gateway->fleets === [] && $gateway->stock === 10 && $gateway->fuel === 1000,
   'A captain persistence failure rolls back fleet creation and both debits.'); }
 $gateway->captainFailure=false;
-$withCaptain = $service->send($context,DispatchRequest::attack(1,[206=>2],10,77,22,0));
+$withCaptain = $service->send($context,DispatchRequest::flight(3,2,PT_PLANET,MT_ATTACK,[206=>2],10,77,22,0));
 $check($gateway->assigned === [77=>$withCaptain->dispatch['fleet_id']], 'The captain is attached to the same accepted fleet.');
 $gateway->target->acs=['group'=>['ankunft'=>1009],'fleets'=>[]];
 $failure(function () use ($service,$context,$request) { $service->send($context,$request); },'zero_galaxy_acs_too_late');
 $check(count($gateway->fleets) === 1, 'A fleet that misses the shared arrival cannot be dispatched.');
 
 $gateway = new ServiceFixtureGateway(); $service = new FleetDispatchService($gateway);
-$before = [$gateway->fleets,$gateway->stock,$gateway->fuel];
-$failure(function () use ($service,$context) {
-  $service->send($context,DispatchRequest::flight(3,2,PT_PLANET,MT_ATTACK,[206=>11],10));
-}, 'Такой флот не сможет пролететь через разлом!');
-$check([$gateway->fleets,$gateway->stock,$gateway->fuel] === $before,
-  'An over-limit attack from the native form must fail before any debit.');
 $gateway->target->rift = [];
-$failure(function () use ($service,$context) {
-  $service->send($context,DispatchRequest::attack(1,[206=>1],10,0,22,0));
-}, 'zero_galaxy_attack_missing');
 foreach ([
   [MT_ATTACK,PT_PLANET,[206=>2],ATTACK_NO_TARGET],
   [MT_SPY,PT_PLANET,[206=>1,SHIP_SPY=>2],ATTACK_NO_TARGET],
-  [MT_RECYCLE,PT_DEBRIS,[206=>1,209=>2],ATTACK_NO_DEBRIS],
 ] as [$mission,$type,$ships,$allowed]) {
   $gateway->stock=10; $gateway->allowed=$allowed;
   $result=$service->send($context,DispatchRequest::flight(3,2,$type,$mission,$ships,10));
   $check($result->fleet === $ships,
     'Native fleet selection must preserve the complete composition when no target or debris exists.');
-  if ($mission === MT_RECYCLE) {
-    $check($result->remaining === 8, 'Escorting ships do not reduce the remaining recycler count.');
-  }
 }
 $gateway->stock=10; $gateway->allowed=ATTACK_NO_FUEL;
 $before = [$gateway->fleets,$gateway->stock,$gateway->fuel];

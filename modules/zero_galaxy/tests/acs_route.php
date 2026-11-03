@@ -127,10 +127,10 @@ namespace {
     'POST zero group overrides ordinary GET' => [['fleet_group'=>'78'], ['fleet_group'=>'77']],
   ] as $label => [$get, $post]) {
     $result = $run($get, $post);
-    $check($result['outcome'] === 'blocked' && $result['message'] === 'ACS_DISABLED',
-      'Disabled rift groups must never enter native join: ' . $label);
-    $check(count($result['queries']) === 1 && strpos($result['queries'][0], 'WHERE id=77') !== false,
-      'Joining must be rejected before world mutation or dispatch: ' . $label);
+    $check($result['outcome'] === 'native' && $result['message'] === null,
+      'Readonly rift selection must remain in the native fleet wizard: ' . $label);
+    $check($result['queries'] === [],
+      'The group is validated by the final shared sender rather than an alternate selection route: ' . $label);
   }
 
   foreach ([['fleet_page'=>'4','fleetid'=>'22'], ['mode'=>'4','fleetid'=>'00022'],
@@ -142,6 +142,9 @@ namespace {
   }
   $result = $run(['mode'=>'4','fleetid'=>'23'], [], ['acs_enabled'=>true]);
   $check($result['outcome'] === 'native', 'Enabled rift ACS must not redirect native ordinary-galaxy forms');
+  $result = $run(['fleet_group'=>'77'], [], ['acs_enabled'=>true]);
+  $check($result['outcome'] === 'native' && $result['queries'] === [],
+    'An enabled rift join must retain fleet.php as its single fleet-selection handler');
 
   $oldLog = ini_set('error_log', '/dev/null');
   try { $result = $run(['mode'=>'4','fleetid'=>'00022'], [], ['acs_enabled'=>'false']); }

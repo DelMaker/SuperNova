@@ -10,14 +10,10 @@ use ZeroGalaxy\RecycleSender;
 use ZeroGalaxy\NativeFleetForm;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
-use ZeroGalaxy\AttackView;
-use ZeroGalaxy\AttackLink;
-use ZeroGalaxy\AttackPolicy;
 use ZeroGalaxy\AdminView;
 use ZeroGalaxy\AcsPolicy;
 use ZeroGalaxy\AcsService;
 use ZeroGalaxy\AcsView;
-use ZeroGalaxy\NativeTemplateAdapter;
 
 class zero_galaxy extends sn_module {
   public $versionCommitted = '';
@@ -102,25 +98,8 @@ class zero_galaxy extends sn_module {
     }
     $this->routeNativeAcs();
     NativeFleetForm::intercept();
-    $attackCoordinates = AttackLink::nativeCoordinates(INITIAL_PAGE, $_SERVER['REQUEST_METHOD'] ?? '', $_GET,
-      max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet));
-    $this->updateWorld($attackCoordinates !== null
+    $this->updateWorld((INITIAL_PAGE === 'fleet' && sys_get_param_int('galaxy', -1) === 0)
       || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack', 'zero_galaxy_recycle', 'zero_galaxy_acs'], true));
-
-    if ($attackCoordinates !== null) {
-      // Old spy reports contain coordinates, not a rift generation. Resolve
-      // the current target; the wizard then validates its own profile and cap.
-      $rift = null;
-      try {
-        if (!$this->worldError && $this->storage) {
-          $rift = $this->storage->findActive($attackCoordinates['system'], $attackCoordinates['position'], SN_TIME_NOW);
-        }
-      } catch (Throwable $error) {
-        error_log('Zero Galaxy attack link: ' . $error->getMessage());
-      }
-      $riftId = $rift && AttackPolicy::limit($rift) !== null ? (int) $rift['rift_id'] : 0;
-      sys_redirect(SN_ROOT_VIRTUAL . 'index.php?page=zero_galaxy_attack&rift_id=' . $riftId);
-    }
 
     $galaxy = $_POST['galaxy'] ?? $_GET['galaxy'] ?? null;
     if (INITIAL_PAGE === 'galaxy' && is_scalar($galaxy)
@@ -169,20 +148,6 @@ class zero_galaxy extends sn_module {
           SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
         }
         sys_redirect(SN_ROOT_VIRTUAL . 'index.php?page=zero_galaxy_acs&fleetid=' . $fleetId);
-      }
-    }
-    $groupId = (int) sys_get_param_id('fleet_group');
-    if ($groupId > 0 && $page < 2) {
-      $group = SN::$db->doquery('SELECT galaxy,system,planet FROM {{aks}} WHERE id=' . $groupId, true);
-      if ($group && (int) $group['galaxy'] === 0) {
-        if (!AcsPolicy::enabled($this->effectiveSettings())) {
-          SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
-        }
-        $this->updateWorld(true);
-        $rift = $this->storage && !$this->worldError
-          ? $this->storage->findActive((int) $group['system'], (int) $group['planet'], SN_TIME_NOW) : null;
-        sys_redirect(SN_ROOT_VIRTUAL . 'index.php?page=zero_galaxy_attack&rift_id=' . (int) ($rift['rift_id'] ?? 0)
-          . '&acs_group=' . $groupId);
       }
     }
   }
@@ -264,7 +229,17 @@ class zero_galaxy extends sn_module {
     if (!$this->worldReady()) {
       SnTemplate::messageBox(SN::$lang['zero_galaxy_unavailable'], SN::$lang['zero_galaxy_title']);
     }
-    AttackView::render($this, $this->storage, $this->settings);
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
+      SnTemplate::messageBox(SN::$lang['zero_galaxy_attack_bad_request'], SN::$lang['fl_error']);
+    }
+    $rift = $this->storage->findById((int) sys_get_param_id('rift_id'), SN_TIME_NOW);
+    if (!$rift) {
+      SnTemplate::messageBox(SN::$lang['zero_galaxy_attack_missing'], SN::$lang['fl_error']);
+    }
+    sys_redirect(SN_ROOT_RELATIVE . 'fleet.php?galaxy=0&system=' . (int) $rift['system']
+      . '&planet=' . (int) $rift['position'] . '&planet_type=' . PT_PLANET
+      . '&target_mission=' . (sys_get_param_id('acs_group') ? MT_AKS : MT_ATTACK)
+      . '&fleet_group=' . (int) sys_get_param_id('acs_group'));
     return $template;
   }
 
@@ -289,19 +264,7 @@ class zero_galaxy extends sn_module {
       }
     }
     $template = AcsView::decorate($this, $template, $this->effectiveSettings());
-    $template = NativeFleetForm::decorate($this, $template, $this->effectiveSettings());
-    return $this->decorateAttack($template);
-  }
-
-  public function decorateAttack($template = null) {
-    if (INITIAL_PAGE !== 'zero_galaxy_attack' || !is_object($template)) {
-      return $template;
-    }
-    $adapter = new NativeTemplateAdapter($template);
-    if ($adapter->value('ZERO_ATTACK_STEP') === null || $adapter->value('ZERO_ATTACK_WRAPPED')
-      || !$adapter->hasHandle(['fleet0', 'fleet1', 'fleet2', 'fleet3'])) { return $template; }
-    AttackView::escapeFleetNames($template);
-    $template->assign_var('ZERO_ATTACK_WRAPPED', true);
-    return $adapter->wrap($this, 'zero_galaxy_attack');
+    return NativeFleetForm::decorate($this, $template, $this->effectiveSettings(),
+      $this->worldError ? null : $this->storage);
   }
 }

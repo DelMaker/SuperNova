@@ -28,15 +28,12 @@ namespace ZeroGalaxy {
     public function __construct($db = null, $prefix = '') {}
     public function tick(...$arguments) { self::$ticks++; }
     public function inSystem(...$arguments) { return []; }
+    public function findById(...$arguments) { return ['rift_id'=>13,'system'=>10,'position'=>5]; }
   }
   class NPCStatistics { public static function sync(...$arguments) {} }
   class UniverseView {
     public static $calls = 0;
     public static function render($module, $template, ...$arguments) { self::$calls++; return $template; }
-  }
-  class AttackView {
-    public static $calls = 0;
-    public static function render(...$arguments) { self::$calls++; }
   }
   class SpySender { public static function send(...$arguments) { return 'UNSAFE_SPY_SENT'; } }
   class RecycleSender { public static function send(...$arguments) { return 'UNSAFE_RECYCLERS_SENT'; } }
@@ -45,7 +42,9 @@ namespace ZeroGalaxy {
 namespace {
   define('INSIDE', true);
   define('SN_ROOT_RELATIVE', '');
+  define('SN_ROOT_VIRTUAL', 'http://localhost:8080/');
   define('SN_TIME_NOW', 1700000000);
+  define('PT_PLANET', 1); define('MT_ATTACK', 1); define('MT_AKS', 2);
   // Ordinary requests must keep working even when another module has a custom
   // dispatcher. This page also keeps initialize() away from the signed worker.
   define('INITIAL_PAGE', ($argv[1] ?? '') === '--worker-initialize' ? 'worker' : 'messages');
@@ -59,13 +58,17 @@ namespace {
     public static $db;
     public static $config;
     public static $sys_user_logged_in = true;
-    public static $lang = ['zero_galaxy_unavailable' => 'MODULE_UNAVAILABLE', 'zero_galaxy_title' => 'Zero Galaxy'];
+    public static $lang = ['zero_galaxy_unavailable' => 'MODULE_UNAVAILABLE', 'zero_galaxy_title' => 'Zero Galaxy',
+      'zero_galaxy_attack_bad_request'=>'BAD_REQUEST','fl_error'=>'Fleet error'];
   }
   class DispatcherUnavailable extends \RuntimeException {}
+  class DispatcherRedirect extends \RuntimeException {}
   class SnTemplate {
     public static function messageBox($message, $title) { throw new DispatcherUnavailable($message); }
   }
   function setHeader($header) {}
+  function sys_redirect($url) { throw new DispatcherRedirect($url); }
+  function sys_get_param_id($name, $default = 0) { return (int) ($_POST[$name] ?? $_GET[$name] ?? $default); }
   function sys_get_param_str($key) { return $key === 'mode' ? 'dispatchFleets' : ''; }
   class CustomDispatcher extends \Fleet\FleetDispatcher {}
   class DispatcherFixtureContainer {
@@ -97,13 +100,12 @@ namespace {
 
   require_once __DIR__ . '/support/autoload.php';
 
-  require_once dirname(__DIR__) . '/classes/ZeroGalaxy/AttackLink.php';
   require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftFleetDispatcher.php';
   require_once dirname(__DIR__) . '/zero_galaxy.php';
 
   require __DIR__ . '/support/assertions.php';
   $fixture = function ($dispatcher, bool $frozen = false) {
-    \ZeroGalaxy\Storage::$ticks = \ZeroGalaxy\UniverseView::$calls = \ZeroGalaxy\AttackView::$calls = 0;
+    \ZeroGalaxy\Storage::$ticks = \ZeroGalaxy\UniverseView::$calls = 0;
     SN::$gc = new DispatcherFixtureContainer($dispatcher, $frozen);
     SN::$db = (object) ['link' => null, 'db_prefix' => 'isolated_fixture_'];
     SN::$config = (object) ['game_maxSystem' => 199, 'game_maxPlanet' => 15];
@@ -160,8 +162,7 @@ namespace {
     }
     $unavailable(function () use ($module) { $module->render(); }, 'The module overview must reject unsupported dispatchers');
     $unavailable(function () use ($module) { $module->attack(); }, 'The attack endpoint must reject unsupported dispatchers');
-    $check(\ZeroGalaxy\UniverseView::$calls === 0 && \ZeroGalaxy\AttackView::$calls === 0,
-      'Blocked module pages must not call the view or attacker sender');
+    $check(\ZeroGalaxy\UniverseView::$calls === 0, 'Blocked module pages must not render the overview');
   }
 
   $module = $fixture(new \Fleet\FleetDispatcher());
@@ -172,8 +173,22 @@ namespace {
   $check(\ZeroGalaxy\Storage::$ticks === 1, 'Supported requests must still reconcile the module world');
   $check($module->render($template) === $template && \ZeroGalaxy\UniverseView::$calls === 1,
     'The supported overview must remain available');
-  $module->attack();
-  $check(\ZeroGalaxy\AttackView::$calls === 1, 'The supported attack page must remain available');
+  $_GET = ['rift_id'=>'13', 'acs_group'=>'77'];
+  try { $module->attack(); $check(false, 'An old attack link must redirect into the native fleet form'); }
+  catch (DispatcherRedirect $redirect) {
+    parse_str(parse_url($redirect->getMessage(), PHP_URL_QUERY), $query);
+    $check(strpos($redirect->getMessage(), SN_ROOT_RELATIVE . 'fleet.php?') === 0
+      && $query['galaxy'] === '0' && $query['system'] === '10' && $query['planet'] === '5'
+      && $query['target_mission'] === (string) MT_AKS && $query['planet_type'] === '1'
+      && $query['fleet_group'] === '77' && !isset($query['acs_group']),
+      'Old rift links must retain their target and ACS group in the single native fleet entry');
+  }
+  $_SERVER['REQUEST_METHOD'] = 'POST'; $_POST = ['rift_id'=>'13'];
+  try { $module->attack(); $check(false, 'The retired wizard must not accept a legacy final POST'); }
+  catch (DispatcherUnavailable $error) {
+    $check($error->getMessage() === 'BAD_REQUEST', 'A legacy wizard POST must stop before fleet dispatch');
+  }
+  $_GET = $_POST = []; $_SERVER['REQUEST_METHOD'] = 'GET';
 
   foreach (['--spy-endpoint', '--recycle-endpoint'] as $endpoint) {
     $process = proc_open([PHP_BINARY, __FILE__, $endpoint],

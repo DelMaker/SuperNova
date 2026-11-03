@@ -43,9 +43,8 @@ final class FleetDispatchService {
         $remaining = $owned - array_sum(array_intersect_key($ships, array_flip(sn_get_groups('flt_recyclers'))));
       }
       $allowed = $this->gateway->allowed($target, $ships, $request->mission, $request->speed);
-      $emptyTarget = $allowed === ATTACK_NO_TARGET && ($request->nativeForm || $request->mission === MT_RECYCLE);
-      $emptyDebris = $allowed === ATTACK_NO_DEBRIS && $request->mission === MT_RECYCLE;
-      if ($allowed !== ATTACK_ALLOWED && !$emptyTarget && !$emptyDebris) {
+      $emptyTarget = $allowed === ATTACK_NO_TARGET && $request->nativeForm && $request->mission !== MT_RECYCLE;
+      if ($allowed !== ATTACK_ALLOWED && !$emptyTarget) {
         throw new DispatchFailure('', $allowed);
       }
       $travel = $this->gateway->travel($target, $ships, $request->speed);

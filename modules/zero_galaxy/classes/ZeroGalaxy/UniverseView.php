@@ -84,8 +84,8 @@ class UniverseView {
         'phaseLabel' => $phaseLabel, 'canSpy' => $canSpy,
         'canAttack' => $canSpy && !empty($profileMetadata),
         'canRecycle' => !empty($debris['DEBRIS_WILL_GATHER']),
-        'attackUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_attack&rift_id=' . $riftId
-          . '&system=' . $system . '&planet=' . $position,
+        'attackUrl' => SN_ROOT_RELATIVE . 'fleet.php?galaxy=0&system=' . $system . '&planet=' . $position
+          . '&planet_type=' . PT_PLANET . '&target_mission=' . MT_ATTACK,
         'imageUrl' => SN_ROOT_RELATIVE . $module->getRootRelative() . 'design/images/phases/' . $phase . '.png?v=' . rawurlencode($module->getVersion()),
         'nextAt' => Lifecycle::nextTransition($rift, $now),
         'nextLabel' => (string) $lang[$phase === 'closed' ? 'zero_galaxy_until_disappearance' : 'zero_galaxy_until_next_phase'],
