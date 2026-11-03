@@ -6,10 +6,6 @@ use Fleet\FleetDispatcher;
 use SN;
 
 class RiftFleetDispatcher extends FleetDispatcher {
-  private $acsEnabled = false;
-
-  public function setAcsEnabled(bool $enabled): void { $this->acsEnabled = $enabled; }
-
   public function getFleetEvents() {
     $events = parent::getFleetEvents();
     $candidates = [];
@@ -50,7 +46,7 @@ class RiftFleetDispatcher extends FleetDispatcher {
       } elseif ($event->missionId === MT_RECYCLE && $event->event === EVENT_FLT_ARRIVE) {
         $events[$index] = new RiftRecycleEvent($event, $legacyOwnerId, $metadataAvailable);
       } else {
-        $events[$index] = new RiftAttackEvent($event, $legacyOwnerId, $metadataAvailable, $this->acsEnabled);
+        $events[$index] = new RiftAttackEvent($event, $legacyOwnerId, $metadataAvailable);
       }
     }
 

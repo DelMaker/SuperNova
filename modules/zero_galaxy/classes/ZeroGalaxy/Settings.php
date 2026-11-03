@@ -13,15 +13,12 @@ class Settings {
   const MAX_POINTS = 4000000000000000;
 
   public static function load(array $overrides = []) {
+    unset($overrides['acs_enabled']);
     $defaults = require dirname(__DIR__, 2) . '/defaults.php';
     if (array_diff_key($overrides, $defaults)) {
       throw new InvalidArgumentException('Unknown zero galaxy setting');
     }
     $settings = array_replace($defaults, $overrides);
-
-    if (!is_bool($settings['acs_enabled'])) {
-      throw new InvalidArgumentException('Invalid boolean: acs_enabled');
-    }
 
     if (!is_numeric($settings['target_active_per_system']) || !is_finite((float) $settings['target_active_per_system'])
       || $settings['target_active_per_system'] < 0 || $settings['target_active_per_system'] > 10000) {

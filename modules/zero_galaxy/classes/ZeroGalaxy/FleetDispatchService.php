@@ -19,7 +19,6 @@ final class FleetDispatchService {
         $ships = $request->ships;
         $limit = AttackPolicy::limit($target->rift);
         if ($limit === null && !$request->nativeForm) { throw new DispatchFailure('zero_galaxy_attack_missing'); }
-        if ($target->acs && count($target->acs['fleets']) >= AcsPolicy::MAX_FLEETS) { throw new DispatchFailure('zero_galaxy_acs_full'); }
         if ($limit !== null && $this->gateway->cost($target, $ships) > $limit) { throw new DispatchFailure(AttackPolicy::OVER_LIMIT); }
       } elseif ($request->mission === MT_SPY) {
         $owned = $this->gateway->inventory($target, SHIP_SPY);
@@ -48,9 +47,6 @@ final class FleetDispatchService {
         throw new DispatchFailure('', $allowed);
       }
       $travel = $this->gateway->travel($target, $ships, $request->speed);
-      if ($target->acs && $context->now + $travel['duration'] > (int) $target->acs['group']['ankunft']) {
-        throw new DispatchFailure('zero_galaxy_acs_too_late');
-      }
       if ($travel['duration'] < 1) {
         throw new DispatchFailure($request->mission === MT_ATTACK ? '' : 'gs_c13',
           $request->mission === MT_ATTACK ? ATTACK_NO_FUEL : null);

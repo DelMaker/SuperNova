@@ -45,13 +45,10 @@
     function applies() {
       var checked = form.querySelector('[name="target_mission"]:checked');
       var mission = Number(checked ? checked.value : field('target_mission', config.mission));
-      if (step !== 2 && !mission) {
-        mission = step === 1 && Number(field('fleet_group', 0)) > 0
-          ? Number((config.attackMissions || [])[1]) : Number(config.mission);
-      }
-      return target && (config.attackMissions || []).map(Number).indexOf(mission) >= 0
+      if (step !== 2 && !mission) { mission = Number(config.mission); }
+      return target && mission === 1
         && matches('galaxy', 0) && matches('system', target.system) && matches('planet', target.position)
-        && matches('planet_type', 1) && matches('fleet_group', config.groupId || 0);
+        && matches('planet_type', 1);
     }
     function text(id, value) {
       var element = document.getElementById(id);
@@ -70,25 +67,6 @@
       var fraction = decimals ? digits.slice(-decimals).replace(/0+$/, '') : '';
       return whole.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0') + (fraction ? '.' + fraction : '') + ' ' + labels.points;
     }
-    function updateTimes(active) {
-      var arrival = Number(config.groupArrival || 0);
-      var show = active && arrival > 0;
-      var duration = step === 1 && typeof window.duration === 'function'
-        ? Number(window.duration()) : Number(config.naturalDuration || 0);
-      document.getElementById('zero_galaxy_acs_arrival').hidden = !show;
-      document.getElementById('zero_galaxy_acs_return').hidden = !show || duration <= 0;
-      document.getElementById('zero_galaxy_acs_wait').hidden = !show;
-      if (!show) { return; }
-      function format(seconds, local) {
-        return new Date(seconds * 1000).toLocaleString(undefined,
-          local ? undefined : {timeZone: config.serverTimeZone});
-      }
-      text('zero_galaxy_acs_arrival_value', format(arrival));
-      text('zero_galaxy_acs_return_value', format(arrival + duration));
-      ['time_dst', 'time_dst_local', 'time_src', 'time_src_local'].forEach(function (id, index) {
-        text(id, format(index < 2 ? arrival : arrival + duration, index % 2 === 1));
-      });
-    }
     function update() {
       var active = !!applies();
       budget.hidden = !active;
@@ -103,9 +81,9 @@
           var limit = integer(target.limit);
           var selected = integer(0);
           var quantity = integer(0);
-          function add(id, amount, existing) {
+          function add(id, amount) {
             var count = integer(amount === '' ? '0' : amount);
-            if (!existing) { quantity += count; }
+            quantity += count;
             if (count > 0) { selected += count * integer((config.unitCosts || {})[id]); }
           }
           if (step === 0) {
@@ -116,7 +94,6 @@
           } else {
             Object.keys(config.fixedFleet || {}).forEach(function (id) { add(id, config.fixedFleet[id]); });
           }
-          Object.keys(config.existingFleet || {}).forEach(function (id) { add(id, config.existingFleet[id], true); });
           selected = selected / scale * scale;
           var over = selected > limit;
           text('zero_galaxy_attack_limit', points(limit));
@@ -132,7 +109,6 @@
           blocked = true;
         }
       }
-      updateTimes(active);
       submits.forEach(function (button, index) { button.disabled = originallyDisabled[index] || blocked; });
       return blocked;
     }

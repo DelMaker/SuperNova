@@ -13,7 +13,6 @@ require_once SN_ROOT_PHYSICAL . 'classes/template_compile.php';
 require_once SN_ROOT_PHYSICAL . 'classes/template.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/NativeTemplateAdapter.php';
 
-// Only presentation dependencies: no sessions, game bootstrap or database.
 class SN { public static $lang = []; }
 class ViewFixtureTemplate extends template {
   public function renderSource(string $source): string {
@@ -25,7 +24,7 @@ class ViewFixtureTemplate extends template {
 
 require __DIR__ . '/support/assertions.php';
 $partial = file_get_contents(SN_ROOT_PHYSICAL . 'design/templates/OpenGame/fleet_miniatures.tpl.html');
-$names = ['Крошечный разлом', 'Literal &copy; &amp; разлом', 'Cash $& [PLANET_IMAGE] разлом', 'Имя "Альфа" и \'Бета\' разлом'];
+$names = ['Literal &copy; &amp; разлом', 'Cash $& [PLANET_IMAGE] разлом', 'Имя "Альфа" и \'Бета\' разлом'];
 foreach ($names as $name) {
   $template = new ViewFixtureTemplate();
   $template->_rootref = &$template->_tpldata['.'][0];

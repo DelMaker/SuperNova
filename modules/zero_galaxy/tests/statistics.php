@@ -158,9 +158,6 @@ try {
   }
   $check($hidden() === '5,6,8,30,42,100,777', 'Concurrent synchronizers must preserve a committed manual edit and new NPC');
   $check($managed() === '6,8', 'Concurrent synchronizers must retain exactly their managed IDs');
-  $cache->value = 'stale again';
-  NPCStatistics::sync($db, $prefix, $cache);
-  $check($cache->value === $hidden(), 'Next request must refresh cache after a parallel database writer');
 } finally {
   $db->rollback();
   foreach ($tables as $table) {

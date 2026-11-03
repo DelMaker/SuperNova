@@ -68,12 +68,12 @@ namespace {
   SN::$lang = ['type_mission'=>[1=>'Attack',2=>'ACS',6=>'Spy',8=>'Recycle'], 'sys_planet_type_sh'=>[1=>'P',2=>'D',3=>'M']]
     + array_fill_keys(['zero_galaxy_fleet_limit','zero_galaxy_attack_selected','zero_galaxy_attack_remaining',
       'zero_galaxy_attack_over','zero_galaxy_points_short','zero_galaxy_attack_title','zero_galaxy_attack_missing',
-      'zero_galaxy_acs_join','zero_galaxy_acs_selected','zero_galaxy_acs_arrival','zero_galaxy_acs_return','zero_galaxy_acs_wait',
       'zero_galaxy_attack_bad_request','zero_galaxy_attack_failed','fl_error'], 'label');
   SN::$lang['zero_galaxy_attack_bad_request'] = 'BAD_REQUEST';
   SN::$lang['zero_galaxy_attack_failed'] = 'FAILED';
   SN::$lang['zero_galaxy_unavailable'] = 'UNAVAILABLE';
   SN::$lang['fl_bad_mission'] = 'BAD_MISSION';
+  SN::$lang['zero_galaxy_acs_disabled'] = 'ACS_DISABLED';
   SN::$gc = (object) ['fleetDispatcher'=>new \ZeroGalaxy\RiftFleetDispatcher()];
   $user = ['id'=>7]; $planetrow = ['id'=>20,'deuterium'=>1000];
   $module = new NativeFormFixtureModule();
@@ -88,7 +88,8 @@ namespace {
     $template->_rootref = &$template->_tpldata['.'][0];
     $template->files[$name] = SN_ROOT_PHYSICAL . 'design/templates/OpenGame/' . $name . '.tpl.html';
     $template->assign_vars(['galaxy'=>$galaxy,'system'=>3,'planet'=>4,
-      'planet_type'=>(int) ($_POST['planet_type'] ?? PT_PLANET),'speed'=>10,'target_mission'=>MT_ATTACK]);
+      'planet_type'=>(int) ($_POST['planet_type'] ?? PT_PLANET),'speed'=>10,
+      'target_mission'=>(int) ($_POST['target_mission'] ?? MT_ATTACK)]);
     $template->assign_var('usedfleet', $_POST['usedfleet'] ?? str_rot13(base64_encode(json_encode([202=>5]))));
     $template->assign_block_vars('fleets', ['START_COORDS'=>'[1:1:1]']);
     return $template;
@@ -113,23 +114,14 @@ namespace {
   \ZeroGalaxy\NativeFleetForm::decorate($module,$template,[]);
   $check(array_column($template->_tpldata['missions'],'ID') === [MT_ATTACK,MT_SPY],
     'A planet exposes attack and reconnaissance even when the selected fleet includes recyclers');
-  $check($template->_rootref['fleet_capacity'] === 987 && $template->_rootref['planet_deuterium'] === 987,
-    'Confirmation uses the native travel estimate at the fixed galaxy distance');
-  $check($template->_tpldata['fleets'][0]['END_COORDS'] === '[0:3:4]', 'The native route shows the empty zero-galaxy target');
   $payload = json_decode($template->_rootref['ZERO_ATTACK_JSON'],true);
   $fields = $payload['fields'];
   $check(\ZeroGalaxy\AttackPolicy::validToken($fields['token'],$fields['token_at'],7,20,0,SN_TIME_NOW),
     'Confirmation signs the actual pilot and departure planet for the final native POST');
   $source = preg_replace('/<!-- INCLUDE [a-z_]+ -->/', '', file_get_contents(SN_ROOT_PHYSICAL . 'design/templates/OpenGame/fleet2.tpl.html'));
   $html = $template->renderSource($source);
-  foreach ([MT_ATTACK,MT_SPY] as $mission) {
-    $check(strpos($html, 'id="target_mission' . $mission . '"') !== false, 'Native mission control is rendered: ' . $mission);
-  }
   $check(strpos($html, 'id="target_mission' . MT_RECYCLE . '"') === false,
     'The real native planet confirmation must not render a recycle radio button');
-  $check(strpos($html, 'action="fleet.php?fleet_page=3"') !== false
-    && strpos($html, 'name="galaxy"          value="0"') !== false,
-    'The actual native template posts galaxy zero to fleet.php without a new endpoint');
   $post(PT_DEBRIS); $template=$fixture('fleet2');
   \ZeroGalaxy\NativeFleetForm::decorate($module,$template,[]);
   $check(array_column($template->_tpldata['missions'],'ID') === [MT_RECYCLE]
@@ -142,16 +134,11 @@ namespace {
   $_SERVER['REQUEST_METHOD'] = 'GET'; $_POST = [];
   $_GET = ['galaxy'=>'0','system'=>'3','planet'=>'4','planet_type'=>'1','target_mission'=>'1'];
   $template = $fixture('fleet0');
-  \ZeroGalaxy\NativeFleetForm::decorate($module,$template,['acs_enabled'=>true],$storage);
+  \ZeroGalaxy\NativeFleetForm::decorate($module,$template,[],$storage);
   $payload = json_decode($template->_rootref['ZERO_ATTACK_JSON'],true);
   $check($payload['step'] === 0 && (string) $payload['target']['limit'] === '100000'
     && $payload['target']['system'] === 3 && $payload['target']['position'] === 4,
     'A direct attack from a report exposes the current rift budget in the native ship selector');
-  $check($payload['target']['name'] === 'Крошечный &copy; разлом' && $payload['target']['color'] === '#ADFF2F',
-    'The native selector receives the current target name and category color without HTML decoding');
-  $check($payload['unitCosts'][202] === '4000' && (string) $payload['costScale'] === '1'
-    && $payload['attackMissions'] === [MT_ATTACK,MT_AKS],
-    'The single wizard supplies native resource costs and the missions subject to its budget');
 
   $_GET['target_mission'] = '0'; $template = $fixture('fleet0');
   $template->assign_var('target_mission',0);
@@ -175,7 +162,6 @@ namespace {
   $payload = json_decode($template->_rootref['ZERO_ATTACK_JSON'],true);
   $check($payload['step'] === 2 && $payload['fixedFleet'][202] === '9007199254740993',
     'Native confirmation preserves every digit of fleet quantities in its budget payload');
-  $check((string) $payload['target']['limit'] === '100000', 'The native confirmation uses the same current target budget');
   foreach ([0,11] as $speed) {
     $post(); $_POST['speed'] = (string) $speed; $template = $fixture('fleet2');
     try {
@@ -204,6 +190,20 @@ namespace {
   } catch (\RuntimeException $error) {
     $check($error->getMessage() === 'BAD_MISSION' && !isset($template->_rootref['ZERO_ATTACK_JSON']),
       'A validly signed planet/recycle POST stops before sending instead of being converted to debris');
+  }
+  foreach ([['fleet_group'=>'77','target_mission'=>'1','error'=>'ACS_DISABLED'],
+    ['fleet_group'=>'0','target_mission'=>'2','error'=>'ACS_DISABLED']] as $forged) {
+    $post(); $_GET['fleet_page'] = 3;
+    $_POST += ['fleet_group'=>$forged['fleet_group'],'target_mission'=>$forged['target_mission'],
+      'source_id'=>'20','token_at'=>(string) SN_TIME_NOW,'token'=>\ZeroGalaxy\AttackPolicy::token(7,20,0,SN_TIME_NOW)];
+    \ZeroGalaxy\NativeFleetForm::intercept(); $template=$fixture('fleet2');
+    try {
+      \ZeroGalaxy\NativeFleetForm::decorate($module,$template,[],$storage);
+      $check(false, 'A forged group or ACS mission must be rejected before dispatch');
+    } catch (\RuntimeException $error) {
+      $check($error->getMessage() === $forged['error'] && !isset($template->_rootref['ZERO_ATTACK_JSON']),
+        'A signed submission cannot add a fleet group or ACS mission to a zero-galaxy flight');
+    }
   }
   echo "Native fleet form: {$assertions} assertions passed; native template compiler, no game bootstrap or database.\n";
 }

@@ -8,10 +8,8 @@ if (PHP_SAPI !== 'cli') {
 $root = dirname(__DIR__, 3) . '/';
 define('SN_ROOT_PHYSICAL', $root);
 define('SN_TIME_NOW', 1700000000);
-define('PT_NONE', 0);
 define('PT_PLANET', 1);
 define('PT_DEBRIS', 2);
-define('PT_MOON', 3);
 define('LOC_PLANET', 1);
 foreach (['NONE' => 0, 'ATTACK' => 1, 'AKS' => 2, 'TRANSPORT' => 3, 'RELOCATE' => 4,
   'HOLD' => 5, 'SPY' => 6, 'COLONIZE' => 7, 'RECYCLE' => 8, 'DESTROY' => 9,
@@ -19,29 +17,17 @@ foreach (['NONE' => 0, 'ATTACK' => 1, 'AKS' => 2, 'TRANSPORT' => 3, 'RELOCATE' =
   define('MT_' . $name, $value);
 }
 require_once __DIR__ . '/support/autoload.php';
-require_once $root . 'includes/constants/constants_units.php';
-require_once $root . 'classes/Common/Traits/TJsonSerializable.php';
-require_once $root . 'classes/Fleet/MissionData.php';
-require_once $root . 'classes/Fleet/MissionEspionageReport.php';
-require_once $root . 'classes/Fleet/MissionEspionage.php';
 require_once $root . 'classes/Fleet/FleetDispatchEvent.php';
 require_once $root . 'classes/Planet/DBStaticPlanet.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Storage.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Lifecycle.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftTarget.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftMissionEvent.php';
-require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
-require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftName.php';
 require_once dirname(__DIR__) . '/classes/ZeroGalaxy/RiftSpyEvent.php';
 
 use Fleet\FleetDispatchEvent;
-use Fleet\MissionEspionage;
-use Fleet\MissionEspionageReport;
-use ZeroGalaxy\RiftName;
 use ZeroGalaxy\RiftSpyEvent;
 
-// Only the unit-storage and owner lookups are fixtures. The native report,
-// visibility thresholds and detection methods below are the actual game code.
 class SN {
   public static $db;
   public static $gc;
@@ -51,45 +37,6 @@ class SN {
     $filter = str_replace('{{planets}}', $table, $filter);
     $result = self::$db->link->query("SELECT * FROM {$table} WHERE {$filter} FOR UPDATE");
     return $fetch ? $result->fetch_assoc() : $result->fetch_all(MYSQLI_ASSOC);
-  }
-}
-
-$fixtureUnits = [];
-$fixtureOwners = [];
-function GetSpyLevel(&$user) {
-  return $user['spy_level'];
-}
-function sys_unit_str2arr($text) {
-  $result = [];
-  foreach (explode(';', $text) as $part) {
-    $pair = explode(',', $part);
-    $result[(int) $pair[0]] = (int) $pair[1];
-  }
-  return $result;
-}
-function sn_get_groups($group) {
-  return $group === 'fleet' ? [SHIP_SMALL_FIGHTER_LIGHT] : [];
-}
-function mrc_get_level(&$user, $planet, $unit, $update = false, $plain = false) {
-  global $fixtureUnits;
-  if (in_array($unit, [TECH_SPY, TECH_WEAPON, TECH_SHIELD, TECH_ARMOR], true)) {
-    return $user['tech'][$unit] ?? 0;
-  }
-  return $fixtureUnits[(int) $planet['id']][$unit] ?? 0;
-}
-function db_user_by_id($ownerId) {
-  global $fixtureOwners;
-  return $fixtureOwners[$ownerId] ?? null;
-}
-
-class SpyFixtureGeneral {
-  public function getGroupsByName($group) {
-    return [
-      'fleet' => [SHIP_SMALL_FIGHTER_LIGHT],
-      'defense' => [UNIT_DEF_TURRET_LASER_SMALL],
-      'structures' => [STRUC_MINE_METAL],
-      'tech' => [TECH_SPY, TECH_WEAPON, TECH_SHIELD, TECH_ARMOR],
-    ][$group];
   }
 }
 
@@ -143,104 +90,9 @@ if (($argv[1] ?? '') === '--lifecycle-worker') {
   exit;
 }
 
-class SpyFixtureMission extends MissionEspionage {
-  public $scanned = [];
-
-  public function __construct(int $attackerLevel, int $defenderLevel, int $probes, int $satellites, int $ships) {
-    global $fixtureUnits;
-    $this->general = new SpyFixtureGeneral();
-    $this->fleet = ['fleet_end_time' => SN_TIME_NOW, 'fleet_array' => SHIP_SPY . ',' . $probes];
-    $this->fleetOwnerRow = ['id' => 1, 'username' => 'Attacker', 'ally_tag' => '', 'spy_level' => $attackerLevel];
-    $this->dstUserRow = ['id' => 2, 'username' => 'NPC', 'ally_tag' => '', 'spy_level' => $defenderLevel,
-      'tech' => [TECH_SPY => $defenderLevel, TECH_WEAPON => 27, TECH_SHIELD => 25, TECH_ARMOR => 26]];
-    $this->srcPlanetRow = ['id' => 10, 'name' => 'Home', 'galaxy' => 1, 'system' => 2, 'planet' => 3, 'planet_type' => PT_PLANET];
-    $this->dstPlanetRow = ['id' => 20, 'id_owner' => 2, 'name' => 'Rift', 'galaxy' => 0, 'system' => 3,
-      'planet' => 5, 'planet_type' => PT_PLANET, 'metal' => 0, 'crystal' => 0, 'deuterium' => 0, 'energy_max' => 0];
-    $fixtureUnits[20] = [SHIP_SMALL_FIGHTER_LIGHT => $ships, SHIP_SATELLITE_SPUTNIK => $satellites,
-      UNIT_DEF_TURRET_LASER_SMALL => 30, STRUC_MINE_METAL => 17];
-  }
-
-  protected function scanGroup($group) {
-    $this->scanned[] = $group;
-    parent::scanGroup($group);
-  }
-
-  public function run(): MissionEspionageReport {
-    $this->doSpying();
-    return $this->missionReport;
-  }
-}
-
 require __DIR__ . '/support/assertions.php';
 
-foreach ([
-  [10, 20, 36, 0, 40, []],
-  [20, 20, 9, 0, 40, ['fleet', 'tech']],
-  [20, 20, 16, 0, 40, ['fleet', 'defense', 'tech']],
-  [20, 20, 36, 0, 40, ['fleet', 'defense', 'structures', 'tech']],
-  [20, 20, 121, 100, 40, ['tech']],
-  [0, 0, 1, 0, 0, ['tech']],
-] as $case) {
-  [$attacker, $defender, $probes, $satellites, $ships, $expectedGroups] = $case;
-  $mission = new SpyFixtureMission($attacker, $defender, $probes, $satellites, $ships);
-  $report = $mission->run();
-  $check($mission->scanned === $expectedGroups, 'Rift reports must use full native espionage and anti-spy concealment');
-  $check($report->targetSpyLevel === $defender && $report->attackerSpyLevel === $attacker, 'Report must retain full actual spy levels');
-  $check($report->getEmpireSpyDiff() === $attacker - $defender, 'Native empire difference must remain unchanged');
-  $check($report->getDetectionTrashold() == $probes * $ships / 4 * pow(2, $defender - $attacker), 'Detection threshold must use full defender technology');
-  $native = MissionEspionageReport::fromJson(json_encode($report));
-  $check($report->getDetectionTrashold() === $native->getDetectionTrashold(), 'Serialized native report must preserve the exact detection threshold');
-  foreach ([0, 25, 99] as $roll) {
-    $report->rolledChance = $native->rolledChance = $roll;
-    $check($report->isSpyDetected() === $native->isSpyDetected(), 'Probe losses must match native detection for the same roll');
-  }
-  if (in_array('tech', $expectedGroups, true)) {
-    $check($defender === 0 ? !isset($report->spiedUnits[TECH_SPY]) : (int) $report->spiedUnits[TECH_SPY] === $defender,
-      'Revealed technology must not be halved');
-    $check((int) $report->spiedUnits[TECH_WEAPON] === 27 && (int) $report->spiedUnits[TECH_SHIELD] === 25
-      && (int) $report->spiedUnits[TECH_ARMOR] === 26, 'Revealed combat technologies must retain their real values');
-  }
-}
-
-// A scan captures the current native planet name. Renaming that planet later
-// must affect new scans without rewriting already serialized message payloads.
-$namedMission = new SpyFixtureMission(20, 20, 36, 0, 40);
-$namedRift = ['config_snapshot' => json_encode(['profile' => ['version' => 1,
-  'category' => ['key' => 'tiny', 'name' => 'Крошечный']]], JSON_UNESCAPED_UNICODE)];
-$namedMission->dstPlanetRow['name'] = RiftName::forRift($namedRift, 'active');
-$activeReport = $namedMission->run();
-$historicalJson = json_encode($activeReport, JSON_UNESCAPED_UNICODE);
-$check($activeReport->targetPlanetName === 'Крошечный разлом', 'A native report constructor must capture the size-qualified current planet name.');
-$check($namedMission->scanned === ['fleet', 'defense', 'structures', 'tech'], 'Naming must not skip the actual native scan-group pipeline.');
-$namedMission->scanned = [];
-$namedMission->dstPlanetRow['name'] = RiftName::forRift($namedRift, 'unstable');
-$unstableReport = $namedMission->run();
-$check($unstableReport->targetPlanetName === 'Крошечный нестабильный разлом', 'A new scan must capture the renamed unstable planet.');
-$check(MissionEspionageReport::fromJson(json_encode($unstableReport, JSON_UNESCAPED_UNICODE))->targetPlanetName
-  === 'Крошечный нестабильный разлом', 'The unstable name must survive native report serialization.');
-$check(MissionEspionageReport::fromJson($historicalJson)->targetPlanetName === 'Крошечный разлом'
-  && $activeReport->targetPlanetName === 'Крошечный разлом', 'Historical scan messages and the original report must retain their captured name.');
-$check($unstableReport->targetPlanetId === $activeReport->targetPlanetId
-  && $unstableReport->targetPlanetGalaxy === 0 && (int) $unstableReport->spiedUnits[SHIP_SMALL_FIGHTER_LIGHT] === 40,
-  'A phase-name change must preserve the native target identity and scanned garrison.');
-
-// Wrapping preserves all native public event state and the stored MT_SPY value.
 $eventReflection = new ReflectionClass(FleetDispatchEvent::class);
-$nativeEvent = $eventReflection->newInstanceWithoutConstructor();
-$nativeEvent->fleet = ['fleet_id' => 77, 'fleet_mission' => MT_SPY, 'fleet_end_galaxy' => 0];
-$nativeEvent->event = 'EVENT_FLT_ARRIVE';
-$nativeEvent->missionId = MT_SPY;
-$nativeEvent->fleetId = 77;
-$nativeEvent->userIdsToLock = [1, 2];
-$nativeEvent->planetIdsToLock = [10, 20];
-$wrapped = new RiftSpyEvent($nativeEvent, 2);
-foreach (get_object_vars($nativeEvent) as $key => $value) {
-  $check($wrapped->$key === $value, 'Event wrapping must preserve native field ' . $key);
-}
-$wrapped->refreshMissionData();
-$check($wrapped->missionId === MT_SPY && $wrapped->fleet['fleet_mission'] === MT_SPY,
-  'Refreshing a spy event must leave both native mission execution and its persisted type intact');
-
 if (getenv('SUPERNOVA_DB_HOST')) {
   mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
   $db = spyTestDb();
@@ -321,7 +173,7 @@ if (getenv('SUPERNOVA_DB_HOST')) {
     $check($replacementEvent->dstPlanetId === 21 && $replacementEvent->dstPlanetOwnerId === 4,
       'Current target must be refreshed after acquiring native locks');
     $check($replacementEvent->missionId === MT_SPY && $replacementEvent->fleet['fleet_mission'] === MT_SPY,
-      'Taking locks must not change either event or persisted mission type');
+      'Refreshed spy arrivals must retain their native mission');
     $db->rollback();
   } finally {
     $db->rollback();

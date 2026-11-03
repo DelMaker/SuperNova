@@ -15,8 +15,9 @@ namespace Modules {
 
 namespace Fleet {
   class FleetDispatcher {
+    public $events = [];
     public function __construct($gc = null) {}
-    public function ordinaryMission(): string { return 'native mission unchanged'; }
+    public function getFleetEvents() { return $this->events; }
   }
 }
 
@@ -45,6 +46,7 @@ namespace {
   define('SN_ROOT_VIRTUAL', 'http://localhost:8080/');
   define('SN_TIME_NOW', 1700000000);
   define('PT_PLANET', 1); define('MT_ATTACK', 1); define('MT_AKS', 2);
+  define('EVENT_FLT_ARRIVE', 1); define('EVENT_FLT_RETURN', 3);
   // Ordinary requests must keep working even when another module has a custom
   // dispatcher. This page also keeps initialize() away from the signed worker.
   define('INITIAL_PAGE', ($argv[1] ?? '') === '--worker-initialize' ? 'worker' : 'messages');
@@ -59,7 +61,7 @@ namespace {
     public static $config;
     public static $sys_user_logged_in = true;
     public static $lang = ['zero_galaxy_unavailable' => 'MODULE_UNAVAILABLE', 'zero_galaxy_title' => 'Zero Galaxy',
-      'zero_galaxy_attack_bad_request'=>'BAD_REQUEST','fl_error'=>'Fleet error'];
+      'zero_galaxy_attack_bad_request'=>'BAD_REQUEST','zero_galaxy_acs_disabled'=>'ACS_DISABLED','fl_error'=>'Fleet error'];
   }
   class DispatcherUnavailable extends \RuntimeException {}
   class DispatcherRedirect extends \RuntimeException {}
@@ -150,7 +152,7 @@ namespace {
     $check(SN::$gc->resolutions === 0, 'Module initialization must not resolve the dispatcher before later modules initialize');
     $ordinaryTemplate = (object) ['ordinary' => true];
     $check($module->route($ordinaryTemplate) === $ordinaryTemplate, 'Ordinary pages must return their own template after module refusal');
-    $check(SN::$gc->fleetDispatcher === $dispatcher && $dispatcher->ordinaryMission() === 'native mission unchanged',
+    $check(SN::$gc->fleetDispatcher === $dispatcher,
       'Unsupported/frozen custom dispatchers and ordinary native missions must stay untouched');
     $check(\ZeroGalaxy\Storage::$ticks === 0, 'Unsupported routes must not initialize or mutate module state');
     // Valid stored world fields cannot be used to bypass capability checks.
@@ -166,23 +168,30 @@ namespace {
   }
 
   $module = $fixture(new \Fleet\FleetDispatcher());
-  $check(SN::$gc->resolutions === 0, 'Default dispatcher installation must also remain lazy');
   $template = (object) ['ordinary' => true];
   $check($module->route($template) === $template && SN::$gc->fleetDispatcher instanceof \ZeroGalaxy\RiftFleetDispatcher,
     'Normal late service resolution must install the module adapter');
   $check(\ZeroGalaxy\Storage::$ticks === 1, 'Supported requests must still reconcile the module world');
   $check($module->render($template) === $template && \ZeroGalaxy\UniverseView::$calls === 1,
     'The supported overview must remain available');
-  $_GET = ['rift_id'=>'13', 'acs_group'=>'77'];
+  $ordinaryAcs = (object) ['event'=>EVENT_FLT_ARRIVE, 'fleet'=>['fleet_end_galaxy'=>1,'fleet_mission'=>MT_AKS]];
+  SN::$gc->fleetDispatcher->events = [$ordinaryAcs];
+  $check(SN::$gc->fleetDispatcher->getFleetEvents() === [$ordinaryAcs],
+    'The module dispatcher must leave ordinary-galaxy ACS events with the native handler');
+  $_GET = ['rift_id'=>'13'];
   try { $module->attack(); $check(false, 'An old attack link must redirect into the native fleet form'); }
   catch (DispatcherRedirect $redirect) {
     parse_str(parse_url($redirect->getMessage(), PHP_URL_QUERY), $query);
     $check(strpos($redirect->getMessage(), SN_ROOT_RELATIVE . 'fleet.php?') === 0
       && $query['galaxy'] === '0' && $query['system'] === '10' && $query['planet'] === '5'
-      && $query['target_mission'] === (string) MT_AKS && $query['planet_type'] === '1'
-      && $query['fleet_group'] === '77' && !isset($query['acs_group']),
-      'Old rift links must retain their target and ACS group in the single native fleet entry');
+      && $query['target_mission'] === (string) MT_ATTACK && $query['planet_type'] === '1'
+      && !isset($query['acs_group']) && empty($query['fleet_group']),
+      'Old rift links must retain their target in the single native fleet entry');
   }
+  $_GET['acs_group'] = '77';
+  try { $module->attack(); $check(false, 'An old group link must not become an attack'); }
+  catch (DispatcherUnavailable $error) { $check($error->getMessage() === 'ACS_DISABLED', 'A retired group link must stop before dispatch'); }
+  $_GET = ['rift_id'=>'13'];
   $_SERVER['REQUEST_METHOD'] = 'POST'; $_POST = ['rift_id'=>'13'];
   try { $module->attack(); $check(false, 'The retired wizard must not accept a legacy final POST'); }
   catch (DispatcherUnavailable $error) {

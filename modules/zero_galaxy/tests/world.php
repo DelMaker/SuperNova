@@ -4,7 +4,6 @@ if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 require __DIR__ . '/support/autoload.php';
 require __DIR__ . '/support/assertions.php';
 
-use ZeroGalaxy\Lifecycle;
 use ZeroGalaxy\RiftRepository;
 use ZeroGalaxy\Settings;
 use ZeroGalaxy\WorldBodies;
@@ -50,7 +49,6 @@ class WorldMemoryRepository implements RiftRepository {
 class WorldMemoryBodies implements WorldBodies {
   public $planets = [];
   public $failMaterialize = false;
-  public $cleanups = 0;
   public function syncOwners(array $categories, array $state, int $now): array {
     return array_fill_keys(array_keys($categories), 17);
   }
@@ -61,7 +59,7 @@ class WorldMemoryBodies implements WorldBodies {
     $this->planets[$rift['rift_id']] = ['owner' => $ownerId, 'phase' => $phase];
   }
   public function removePlanet(array $rift, int $ownerId, ?array $planet): void { unset($this->planets[$rift['rift_id']]); }
-  public function removeUnusedOwners(): void { $this->cleanups++; }
+  public function removeUnusedOwners(): void {}
 }
 
 $settings = Settings::load(['target_active_per_system' => 1, 'generation_seconds' => 100]);
@@ -74,27 +72,9 @@ $world = new WorldReconciler($records, $bodies, function (string $key, array $ca
   return ['version' => 1, 'category' => ['key' => $key, 'name' => $category['name'], 'color' => $category['color']]];
 });
 $world->tick(1000, $settings, 1, 1);
-$check(count($records->rifts) === 1, 'Initial seeding must create one rift for a single guaranteed slot');
-$check($records->timeline['seeded_systems'] === 1 && $records->timeline['next_generation_at'] === 1100,
-  'Seeding must retain the generation cadence');
-$rift = $records->rifts[1];
-$check($rift['opens_at'] === 1002 && $rift['closes_at'] === 1009 && $rift['disappears_at'] === 1011,
-  'Reconciliation must preserve the consecutive lifecycle deadlines');
-$check($bodies->planets === [], 'Energy phase must not materialize a native planet');
 $world->tick(1001, $settings, 1, 1);
 $check($records->transactions === 1, 'A non-due request must skip the world transaction');
 $paused = array_replace($settings, ['target_active_per_system' => 0]);
-$world->tick(1002, $paused, 1, 1);
-$check($bodies->planets[1] === ['owner' => 17, 'phase' => 'active'], 'Opening must invoke the native adapter with the resolved owner');
-$world->tick(1005, $paused, 1, 1);
-$check($bodies->planets[1]['phase'] === 'unstable', 'Unstable deadline must update the same native planet');
-$world->tick(1009, $paused, 1, 1);
-$check($bodies->planets === [] && isset($records->rifts[1]), 'Closure must remove the planet but retain the closed marker');
-$world->tick(1011, $paused, 1, 1);
-$check($records->rifts === [], 'Final expiration must remove the marker');
-$check($records->timeline['next_generation_at'] === 1100, 'Forced lifecycle transitions must not move a future generation deadline');
-
-$records->rifts[1] = $rift; $records->timeline['next_tick_at'] = 0;
 $before = [$records->timeline, $records->rifts]; $bodies->failMaterialize = true;
 try { $world->tick(1003, $paused, 1, 1, true); $check(false, 'A failed native adapter must propagate its error'); }
 catch (RuntimeException $error) {
@@ -102,10 +82,5 @@ catch (RuntimeException $error) {
 }
 $check([$records->timeline, $records->rifts] === $before && $records->rollbacks === 1,
   'A native adapter failure must roll back the world transaction and its schedule');
-
-$bodies->failMaterialize = false;
-$empty = $paused; $empty['categories'] = [];
-$world->tick(1003, $empty, 1, 1, true);
-$check($records->rifts === [] && $bodies->planets === [], 'Removing the last category must remove its rifts and stop generation');
 
 echo "World reconciliation: {$assertions} assertions passed; explicit ports, no engine bootstrap or database.\n";

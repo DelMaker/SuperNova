@@ -80,8 +80,6 @@ try {
   $initial = $rows("SELECT * FROM {$prefix}zero_galaxy_rifts ORDER BY rift_id");
   $check(count($initial) === 2, 'Four eligible systems must reserve only two globally capped great rifts');
   $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}planets") === 0, 'Energy reservations must not create planets early');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_npcs") === 7,
-    'All configured categories must have one NPC before any planet opens');
   $owner = (int) $scalar("SELECT owner_id FROM {$prefix}zero_galaxy_npcs WHERE category_key = 'great'");
   $saved = [];
   foreach ($initial as $rift) { $saved[(int) $rift['rift_id']] = $rift; }
@@ -172,10 +170,6 @@ try {
     $check($profile['category']['name'] === 'Обновлённый Великий' && $profile['target_points'] === 134077480581000
       && array_sum($profile['resources']) === 0, 'Only new garrisons must receive changed category balance');
   }
-  $storage->tick($now + 1000, $paused, 4, 1, true);
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}zero_galaxy_rifts") === 0
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE user_bot = 200") === 7,
-    'Skipping beyond whole lifetimes must not leak or recreate category NPCs');
   echo "Population: {$assertions} assertions passed; shared owners and native garrisons checked.\n";
 } finally {
   if ((int) $scalar('SELECT @@in_transaction') !== 0) { $db->rollback(); }

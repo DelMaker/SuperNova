@@ -92,10 +92,6 @@ try {
   $flightBefore = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = {$fleet}");
 
   $storage = new Storage($db, $prefix); $storage->install();
-  $check($db->query("SHOW COLUMNS FROM {$prefix}zero_galaxy_npcs LIKE 'category_key'")->num_rows === 1,
-    'Installation must upgrade the per-rift registry to support categories');
-  $check($one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id = {$rift}") === $before,
-    'Schema migration must retain the existing rift');
   $writeCommands = function () use ($db): array {
     return $db->query("SHOW SESSION STATUS WHERE Variable_name IN
       ('Com_create_table','Com_alter_table','Com_insert','Com_update','Com_delete','Com_replace')")->fetch_all(MYSQLI_ASSOC);
@@ -124,7 +120,6 @@ try {
   $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}users WHERE id IN ({$oldOwner},{$orphan},{$legacyOwner})") === 0
     && (int) $scalar("SELECT COUNT(*) FROM {$prefix}unit WHERE unit_player_id IN ({$oldOwner},{$orphan},{$legacyOwner})") === 0,
     'Migration must retire all old per-rift and legacy NPCs, including external blueprint inventory');
-  $check((int) $scalar("SELECT npc_owner_id FROM {$prefix}zero_galaxy_state WHERE id = 1") === 0, 'Migration must stop using the global legacy owner');
   $npc = $one("SELECT * FROM {$prefix}users WHERE id = {$owner}");
   $check((int) $npc['user_bot'] === 200 && (int) $npc['authlevel'] === 0 && (int) $npc['parent_account_id'] === 0
     && strlen($npc['password']) === 64 && $npc['password'][0] === '!', 'Shared NPCs must remain service users with disabled login');

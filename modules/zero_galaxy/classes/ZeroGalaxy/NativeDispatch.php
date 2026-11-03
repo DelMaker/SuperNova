@@ -54,10 +54,7 @@ class NativeDispatch implements FleetDispatchGateway {
     $rift = $request->mission === MT_ATTACK && $destination
       ? $this->db->doquery("SELECT * FROM `{$prefix}zero_galaxy_rifts` WHERE system={$request->system}
         AND position={$request->position} AND planet_id=" . (int) $destination['id'] . " FOR UPDATE", true) : null;
-    $group = $request->groupId ? AcsService::group($request->groupId,
-      (int) $context->actor['id'], $rift ?: [], $context->settings, true) : null;
     $owners = [(int) $context->actor['id']];
-    if ($group) { $owners = array_merge($owners, array_map('intval', explode(',', $group['eingeladen']))); }
     $planets = [$sourceId];
     if ($destination) {
       $owners[] = (int) $destination['id_owner'];
@@ -77,13 +74,11 @@ class NativeDispatch implements FleetDispatchGateway {
       || ($request->mission === MT_SPY && !$planet && !$request->nativeForm)) { return null; }
     $planet = $planet ?: ['id' => 0, 'id_owner' => 0, 'galaxy' => 0, 'system' => $request->system,
       'planet' => $request->position, 'planet_type' => $request->planetType, 'debris_metal' => 0, 'debris_crystal' => 0];
-    $acs = $group ? AcsService::load($request->groupId, (int) $actor['id'], $rift, $context->settings, true) : null;
-    return new LockedRiftTarget($actor, $source, $planet, $rift ?: [], $acs);
+    return new LockedRiftTarget($actor, $source, $planet, $rift ?: []);
   }
 
   public function cost(LockedRiftTarget $target, array $ships): int {
-    return $target->acs ? AcsPolicy::playerCost($target->acs['fleets'], (int) $target->actor['id'], $ships)
-      : AttackPolicy::cost($ships);
+    return AttackPolicy::cost($ships);
   }
 
   public function inventory(LockedRiftTarget $target, int $unitId): int {
@@ -161,18 +156,12 @@ class NativeDispatch implements FleetDispatchGateway {
     if (!db_mysql::$db_in_transaction || !$this->db->transactionCheck()) {
       throw new RuntimeException('Zero Galaxy dispatch requires the caller transaction');
     }
-    $groupId = $request->groupId;
-    $groupArrival = $target->acs ? (int) $target->acs['group']['ankunft'] : 0;
-    $mission = $groupId ? MT_AKS : $request->mission;
-    $naturalArrival = $now + (int) $travel['duration'];
-    if ($mission === MT_AKS ? ($groupId < 1 || $groupArrival < $naturalArrival)
-      : ($groupId !== 0 || $groupArrival !== 0)) { throw new RuntimeException('Invalid Zero Galaxy ACS dispatch'); }
-    $arrival = $groupId ? $groupArrival : $naturalArrival;
+    $arrival = $now + (int) $travel['duration'];
     $returnAt = $arrival + (int) $travel['duration'];
     $source = $target->source;
     $planet = $target->planet;
     $fleetId = DbFleetStatic::fleet_insert_set_dbq([
-      'fleet_owner' => (int) $target->actor['id'], 'fleet_mission' => $mission,
+      'fleet_owner' => (int) $target->actor['id'], 'fleet_mission' => $request->mission,
       'fleet_amount' => array_sum($ships), 'fleet_array' => sys_unit_arr2str($ships),
       'fleet_start_time' => $arrival, 'fleet_start_planet_id' => (int) $source['id'],
       'fleet_start_galaxy' => (int) $source['galaxy'], 'fleet_start_system' => (int) $source['system'],
@@ -181,7 +170,7 @@ class NativeDispatch implements FleetDispatchGateway {
       'fleet_end_galaxy' => 0, 'fleet_end_system' => (int) $planet['system'],
       'fleet_end_planet' => (int) $planet['planet'],
       'fleet_end_type' => $request->planetType,
-      'fleet_target_owner' => (int) $planet['id_owner'], 'fleet_group' => $groupId, 'start_time' => $now,
+      'fleet_target_owner' => (int) $planet['id_owner'], 'start_time' => $now,
     ]);
     if (!$fleetId) { throw new RuntimeException('Zero Galaxy fleet was not created'); }
     $changes = [];
@@ -193,7 +182,7 @@ class NativeDispatch implements FleetDispatchGateway {
       || !OldDbChangeSet::db_changeset_apply(['unit' => $changes])) {
       throw new RuntimeException('Zero Galaxy dispatch resources were not deducted');
     }
-    return ['fleet_id' => (int) $fleetId, 'arrival' => $arrival, 'return_at' => $returnAt, 'mission' => $mission];
+    return ['fleet_id' => (int) $fleetId, 'arrival' => $arrival, 'return_at' => $returnAt, 'mission' => $request->mission];
   }
 
   public function refreshSource(array $source, int $fuel): array {

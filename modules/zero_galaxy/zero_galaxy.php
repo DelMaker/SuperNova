@@ -11,8 +11,6 @@ use ZeroGalaxy\NativeFleetForm;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
 use ZeroGalaxy\AdminView;
-use ZeroGalaxy\AcsPolicy;
-use ZeroGalaxy\AcsService;
 use ZeroGalaxy\AcsView;
 
 class zero_galaxy extends sn_module {
@@ -31,7 +29,6 @@ class zero_galaxy extends sn_module {
     $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
     $this->manifest['mvc']['view']['zero_galaxy_recycle'] = ['callable' => 'sendRecyclers'];
     $this->manifest['mvc']['view']['zero_galaxy_attack'] = ['callable' => 'attack'];
-    $this->manifest['mvc']['view']['zero_galaxy_acs'] = ['callable' => 'acs'];
     $this->manifest['mvc']['view'][''] = ['callable' => 'decorateView'];
     $this->manifest['menu']['menu_zero_galaxy'] = [
       'LEVEL' => 'submenu',
@@ -62,9 +59,7 @@ class zero_galaxy extends sn_module {
           return $dispatcher;
         }
 
-        $adapter = new RiftFleetDispatcher($gc);
-        $adapter->setAcsEnabled(!empty($this->effectiveSettings()['acs_enabled']));
-        return $adapter;
+        return new RiftFleetDispatcher($gc);
       });
     } catch (Throwable $error) {
       // Another module may already have resolved the service. Never replace a
@@ -88,7 +83,6 @@ class zero_galaxy extends sn_module {
       'sn_mvc[pages][zero_galaxy_spy]' => ['filename' => '', 'options' => []],
       'sn_mvc[pages][zero_galaxy_recycle]' => ['filename' => '', 'options' => []],
       'sn_mvc[pages][zero_galaxy_attack]' => ['filename' => '', 'options' => []],
-      'sn_mvc[pages][zero_galaxy_acs]' => ['filename' => '', 'options' => []],
     ];
   }
 
@@ -99,7 +93,7 @@ class zero_galaxy extends sn_module {
     $this->routeNativeAcs();
     NativeFleetForm::intercept();
     $this->updateWorld((INITIAL_PAGE === 'fleet' && sys_get_param_int('galaxy', -1) === 0)
-      || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack', 'zero_galaxy_recycle', 'zero_galaxy_acs'], true));
+      || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack', 'zero_galaxy_recycle'], true));
 
     $galaxy = $_POST['galaxy'] ?? $_GET['galaxy'] ?? null;
     if (INITIAL_PAGE === 'galaxy' && is_scalar($galaxy)
@@ -128,13 +122,13 @@ class zero_galaxy extends sn_module {
       catch (InvalidArgumentException $error) {
         error_log('Zero Galaxy configuration: ' . $error->getMessage());
         $this->settingsError = $error;
-        $this->settings = Settings::load(['target_active_per_system' => 0, 'acs_enabled' => false]);
+        $this->settings = Settings::load(['target_active_per_system' => 0]);
       }
     }
     return $this->settings;
   }
 
-  /** Native fleet forms cannot send to galaxy zero; intercept before their mutations. */
+  /** Block native group creation for zero-galaxy fleets before its mutations. */
   private function routeNativeAcs(): void {
     if (INITIAL_PAGE !== 'fleet') { return; }
     // Match the native parser, including mode=4 and zero-prefixed IDs. A
@@ -144,10 +138,7 @@ class zero_galaxy extends sn_module {
     if ($page === 4 && $fleetId > 0) {
       $fleet = SN::$db->doquery('SELECT fleet_end_galaxy FROM {{fleets}} WHERE fleet_id=' . $fleetId, true);
       if ($fleet && (int) $fleet['fleet_end_galaxy'] === 0) {
-        if (!AcsPolicy::enabled($this->effectiveSettings())) {
-          SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
-        }
-        sys_redirect(SN_ROOT_VIRTUAL . 'index.php?page=zero_galaxy_acs&fleetid=' . $fleetId);
+        SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
       }
     }
   }
@@ -172,9 +163,6 @@ class zero_galaxy extends sn_module {
         if ($this->settingsError) { throw $this->settingsError; }
         Profile::validateSettings($this->settings);
         $this->storage = new Storage(SN::$db->link, SN::$db->db_prefix);
-      }
-      if ($checkDispatcher) {
-        SN::$gc->fleetDispatcher->setAcsEnabled(!empty($this->settings['acs_enabled']));
       }
       $this->storage->tick(SN_TIME_NOW, $this->settings,
         max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet), $force);
@@ -232,22 +220,17 @@ class zero_galaxy extends sn_module {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
       SnTemplate::messageBox(SN::$lang['zero_galaxy_attack_bad_request'], SN::$lang['fl_error']);
     }
+    if (sys_get_param_id('acs_group') || sys_get_param_id('fleet_group')) {
+      SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
+    }
     $rift = $this->storage->findById((int) sys_get_param_id('rift_id'), SN_TIME_NOW);
     if (!$rift) {
       SnTemplate::messageBox(SN::$lang['zero_galaxy_attack_missing'], SN::$lang['fl_error']);
     }
     sys_redirect(SN_ROOT_RELATIVE . 'fleet.php?galaxy=0&system=' . (int) $rift['system']
       . '&planet=' . (int) $rift['position'] . '&planet_type=' . PT_PLANET
-      . '&target_mission=' . (sys_get_param_id('acs_group') ? MT_AKS : MT_ATTACK)
-      . '&fleet_group=' . (int) sys_get_param_id('acs_group'));
+      . '&target_mission=' . MT_ATTACK);
     return $template;
-  }
-
-  public function acs($template = null) {
-    if (!$this->worldReady()) {
-      SnTemplate::messageBox(SN::$lang['zero_galaxy_unavailable'], SN::$lang['zero_galaxy_title']);
-    }
-    return AcsService::render($this, $this->storage, $this->settings, $template);
   }
 
   public function sendRecyclers($template = null) {
@@ -263,7 +246,7 @@ class zero_galaxy extends sn_module {
         error_log('Zero Galaxy admin list: ' . $error->getMessage());
       }
     }
-    $template = AcsView::decorate($this, $template, $this->effectiveSettings());
+    $template = AcsView::decorate($this, $template);
     return NativeFleetForm::decorate($this, $template, $this->effectiveSettings(),
       $this->worldError ? null : $this->storage);
   }

@@ -27,8 +27,12 @@ class NativeFleetForm {
     if ($step < 0 || ($step !== 1 && (int) $adapter->value('galaxy') !== 0)) { return $template; }
     global $user, $planetrow;
     try {
-      $group = self::integer($_POST['fleet_group'] ?? $_GET['fleet_group'] ?? 0);
-      $fields = ['fleet_group' => $group];
+      if ((int) $adapter->value('galaxy') === 0
+        && (self::integer($_POST['fleet_group'] ?? $_GET['fleet_group'] ?? 0) !== 0
+          || (int) $adapter->value('target_mission') === MT_AKS)) {
+        throw new InvalidArgumentException('zero_galaxy_acs_disabled');
+      }
+      $fields = [];
       if ($step === 2) {
         $system = self::integer($_POST['system'] ?? null);
         $position = self::integer($_POST['planet'] ?? null);
@@ -55,7 +59,7 @@ class NativeFleetForm {
             if (self::integer($_POST[$resource] ?? 0) !== 0) { throw new InvalidArgumentException('zero_galaxy_attack_bad_request'); }
           }
           $request = DispatchRequest::flight($system, $position, $type, $mission, $ships, $speed,
-            self::integer($_POST['captain_id'] ?? 0), $sourceId, $group);
+            self::integer($_POST['captain_id'] ?? 0), $sourceId);
           $result = (new FleetDispatchService(new NativeDispatch()))->send(new DispatchContext($user, $settings, SN_TIME_NOW), $request);
           $planetrow = $result->refreshedSource;
           $target = $result->target->planet + ['name' => ''];
@@ -63,7 +67,7 @@ class NativeFleetForm {
           self::sent($result->toArray(), $target);
           return $template;
         }
-        $missions = DispatchRequest::missions($type, $ships, $group);
+        $missions = DispatchRequest::missions($type, $ships);
         if (!$missions) { throw new InvalidArgumentException('fl_bad_mission'); }
         if (!in_array($mission, $missions, true)) {
           $mission = count($ships) === 1 && in_array(MT_SPY, $missions, true) ? MT_SPY : $missions[0];
@@ -86,8 +90,7 @@ class NativeFleetForm {
         $fields += ['source_id' => $sourceId, 'token_at' => SN_TIME_NOW,
           'token' => AttackPolicy::token((int) $user['id'], $sourceId, 0, SN_TIME_NOW)];
       }
-      $payload = self::payload($adapter, $storage, $settings, $step, $group, $fields);
-      if ($step === 2) { $payload['naturalDuration'] = (int) ($travel['duration'] ?? 0); }
+      $payload = self::payload($adapter, $storage, $step, $fields);
       $template->assign_vars(['ZERO_ATTACK_STEP' => $step,
         'ZERO_ATTACK_JSON' => json_encode($payload,
           JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR),
@@ -108,19 +111,16 @@ class NativeFleetForm {
     }
   }
 
-  private static function payload(NativeTemplateAdapter $adapter, ?Storage $storage, array $settings,
-    int $step, int $groupId, array $fields): array {
-    global $user;
+  private static function payload(NativeTemplateAdapter $adapter, ?Storage $storage, int $step, array $fields): array {
     $lang = SN::$lang;
-    $mission = $groupId ? MT_AKS : (int) $adapter->value('target_mission');
-    $payload = ['step' => $step, 'mission' => $mission, 'groupId' => $groupId,
-      'attackMissions' => [MT_ATTACK, MT_AKS], 'distance' => \Universe::getBaseGalaxyDistance(), 'fields' => $fields];
+    $mission = (int) $adapter->value('target_mission');
+    $payload = ['step' => $step, 'mission' => $mission,
+      'distance' => \Universe::getBaseGalaxyDistance(), 'fields' => $fields];
     if (!$storage || (int) $adapter->value('galaxy') !== 0
       || (int) $adapter->value('planet_type') !== PT_PLANET) { return $payload; }
     $rift = $storage->findActive((int) $adapter->value('system'), (int) $adapter->value('planet'), SN_TIME_NOW);
     if (!$rift || ($limit = AttackPolicy::limit($rift)) === null) { return $payload; }
-    if ($step < 2 && !in_array($mission, [MT_ATTACK, MT_AKS], true)) { return $payload; }
-    $acs = $groupId ? AcsService::load($groupId, (int) $user['id'], $rift, $settings) : null;
+    if ($step < 2 && $mission !== MT_ATTACK) { return $payload; }
     $prices = []; $scale = 1;
     foreach (sn_get_groups('fleet') as $id) {
       $price = (float) (eco_get_total_cost($id, 1)['total'] ?? 0);
@@ -129,26 +129,17 @@ class NativeFleetForm {
       $prices[$id] = $price;
     }
     foreach ($prices as $id => $price) { $prices[$id] = sprintf('%.0F', round($price * $scale)); }
-    $existing = [];
-    foreach ($acs['fleets'] ?? [] as $fleet) {
-      if ((int) $fleet['fleet_owner'] !== (int) $user['id']) { continue; }
-      foreach (sys_unit_str2arr($fleet['fleet_array']) as $id => $count) { $existing[$id] = ($existing[$id] ?? 0) + $count; }
-    }
     $profile = Profile::read($rift);
     return $payload + ['target' => ['system' => (int) $rift['system'], 'position' => (int) $rift['position'],
       'name' => RiftName::forRift($rift, Lifecycle::phase($rift, SN_TIME_NOW), $lang['zero_galaxy_time']['locale'] ?? 'ru'),
       'color' => $profile['category']['color'], 'limit' => (string) $limit . ($scale === 1 ? '' : '000000')],
       'unitCosts' => $prices, 'costScale' => (string) $scale,
       'fixedFleet' => $step ? array_map('strval', AttackPolicy::decode($adapter->value('usedfleet'))) : [],
-      'existingFleet' => array_map('strval', $existing),
-      'groupArrival' => (int) ($acs['group']['ankunft'] ?? 0), 'serverTimeZone' => date_default_timezone_get(),
       'labels' => ['limit' => $lang['zero_galaxy_fleet_limit'],
-        'selected' => $groupId ? $lang['zero_galaxy_acs_selected'] : $lang['zero_galaxy_attack_selected'],
+        'selected' => $lang['zero_galaxy_attack_selected'],
         'remaining' => $lang['zero_galaxy_attack_remaining'], 'over' => $lang['zero_galaxy_attack_over'],
         'missing' => $lang['zero_galaxy_attack_missing'],
-        'points' => $lang['zero_galaxy_points_short'], 'attackTitle' => $lang['zero_galaxy_attack_title'],
-        'acsArrival' => $lang['zero_galaxy_acs_arrival'], 'acsReturn' => $lang['zero_galaxy_acs_return'],
-        'acsWait' => $lang['zero_galaxy_acs_wait']]];
+        'points' => $lang['zero_galaxy_points_short'], 'attackTitle' => $lang['zero_galaxy_attack_title']]];
   }
 
   private static function sent(array $result, array $target): void {

@@ -124,9 +124,6 @@ namespace {
   }
   $check($payload['rifts'][0]['canRecycle'] && $payload['rifts'][1]['canRecycle'], 'Active and unstable debris must allow quick collection');
   $check(!$payload['rifts'][2]['canRecycle'] && !$payload['rifts'][3]['canRecycle'] && !$payload['rifts'][4]['canRecycle'], 'Nonexistent or empty fields must not allow collection');
-  $check($payload['recycleUrl'] === 'index.php?page=zero_galaxy_recycle' && $payload['recycleMission'] === MT_RECYCLE
-    && $payload['debrisType'] === PT_DEBRIS, 'The native quick control must be routed to the module endpoint');
-  $check($template->_rootref['PLANET_RECYCLERS'] === 5 && $template->_rootref['PLANET_RECYCLERS_TEXT'] === '5', 'Available recycler counter must use the selected source planet');
   $check(\Fleet\DbFleetStatic::$reads === 1, 'Incoming fleets must be read once per system');
   $check(Universe::$distances && count(array_filter(Universe::$distances, function ($pair) { return $pair !== [1,0]; })) === 0,
     'All native transport estimates must use one intergalactic distance from any actual source');

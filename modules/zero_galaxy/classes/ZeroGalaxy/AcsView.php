@@ -3,8 +3,8 @@
 namespace ZeroGalaxy;
 
 class AcsView {
-  public static function decorate($module, $template, array $settings) {
-    if (!is_object($template) || !empty($settings['acs_enabled'])) { return $template; }
+  public static function decorate($module, $template) {
+    if (!is_object($template)) { return $template; }
     $adapter = new NativeTemplateAdapter($template);
     if ($adapter->value('ZERO_GALAXY_ACS_FILTERED')) { return $template; }
     if ($adapter->isNative('fleet1')) {

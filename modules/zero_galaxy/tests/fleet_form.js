@@ -9,25 +9,20 @@ const template = fs.readFileSync(path.join(__dirname, '../design/templates/OpenG
 
 function fixture(options = {}) {
   const config = Object.assign({
-    step: 0, distance: 20000, mission: 1, attackMissions: [1, 2], groupId: 0,
-    fields: {source_id: 11, token_at: 1700000000, token: 'signed', fleet_group: 0},
+    step: 0, distance: 20000, mission: 1,
+    fields: {source_id: 11, token_at: 1700000000, token: 'signed'},
     target: {system: 18, position: 6, name: '<Большой> разлом', color: '#7b2cbf', limit: '100'},
-    unitCosts: {206: '20'}, costScale: '1', fixedFleet: {206: '3'}, existingFleet: {},
+    unitCosts: {206: '20'}, costScale: '1', fixedFleet: {206: '3'},
     labels: {points: 'очк.', selected: 'Стоимость', remaining: 'Осталось', over: 'Превышение', missing: 'Нет данных'},
-    serverTimeZone: 'UTC',
   }, options);
   const nodes = {};
   for (const match of template.matchAll(/id="([^"]+)"/g)) {
     nodes[match[1]] = {hidden: true, style: {}, textContent: '', className: ''};
   }
-  for (const id of ['time_dst', 'time_dst_local', 'time_src', 'time_src_local']) {
-    nodes[id] = {textContent: ''};
-  }
   const fields = Object.fromEntries(Object.entries({
-    galaxy: '0', system: '18', planet: '6', planet_type: '1', fleet_group: '0',
+    galaxy: '0', system: '18', planet: '6', planet_type: '1',
     target_mission: String(config.mission), speed: '10', source_id: 'old',
   }).map(([name, value]) => [name, {name, value, readOnly: false, disabled: false}]));
-  if (options.noGroupField) { delete fields.fleet_group; }
   const ships = [{name: 'ships[206]', value: '3'}];
   const button = {disabled: !!options.disabled};
   const radios = config.step === 2 ? [1, 2, 6, 8].map(value => ({
@@ -37,7 +32,6 @@ function fixture(options = {}) {
   const timers = [];
   let appended = 0;
   const form = {
-    action: 'fleet.php?fleet_page=' + (config.step + 1),
     elements: {namedItem(name) {
       return name === 'target_mission' && radios.length
         ? {value: (radios.find(radio => radio.checked) || {}).value || ''} : fields[name];
@@ -56,11 +50,7 @@ function fixture(options = {}) {
   };
   const context = vm.createContext({document, console, BigInt: options.noBigInt ? undefined : BigInt,
     setTimeout(callback) { timers.push(callback); },
-    distance: () => 987, duration: () => 600 / Number(fields.speed.value),
-    shortInfo() {
-      for (const id of ['time_dst', 'time_dst_local', 'time_src', 'time_src_local']) { nodes[id].textContent = 'native preview'; }
-      return 'native shortInfo';
-    },
+    distance: () => 987, shortInfo: () => 'native shortInfo',
     fl_calc_stats: () => 'native stats', fleet_global_update: false,
   });
   context.window = context;
@@ -83,15 +73,10 @@ const selection = fixture();
 assert.equal(selection.nodes.zero_galaxy_attack_budget.hidden, false);
 assert.equal(selection.nodes.zero_galaxy_attack_selected.textContent, '60 очк.');
 assert.equal(selection.nodes.zero_galaxy_attack_target.textContent, '<Большой> разлом [0:18:6]');
-assert.equal(selection.form.action, 'fleet.php?fleet_page=1');
-assert.equal(selection.fields.source_id.value, 11);
 assert.equal(selection.appended(), 2, 'Existing native fields are updated rather than duplicated');
-const nativeSelection = fixture({noGroupField: true, fields: {fleet_group: 0}});
-assert.equal(nativeSelection.fields.fleet_group.value, 0, 'Native fleet0 has no group input: insert the payload default');
-assert.equal(nativeSelection.nodes.zero_galaxy_attack_budget.hidden, false);
-assert.equal(nativeSelection.nodes.zero_galaxy_attack_selected.textContent, '60 очк.');
+assert.equal(selection.fields.token.value, 'signed');
 selection.ships[0].value = '6';
-assert.equal(selection.context.fl_calc_stats(), 'native stats');
+selection.context.fl_calc_stats();
 assert.equal(selection.button.disabled, true, 'Native bulk-selection hooks update the live cap');
 assert.equal(selection.fire('submit').prevented, true);
 selection.ships[0].value = '5';
@@ -114,7 +99,10 @@ assert.equal(fractional.button.disabled, true);
 const coordinates = fixture({step: 1, fixedFleet: {206: '6'}});
 assert.equal(coordinates.context.distance(), 20000);
 assert.equal(coordinates.button.disabled, true);
-for (const [name, value] of [['galaxy', '1'], ['galaxy', ''], ['system', '19'], ['planet', '7'], ['planet_type', '3'], ['fleet_group', '9']]) {
+coordinates.fields.target_mission.value = '0';
+coordinates.context.shortInfo();
+assert.equal(coordinates.nodes.zero_galaxy_attack_budget.hidden, false, 'Native mission placeholder retains the requested attack cap');
+for (const [name, value] of [['galaxy', '1'], ['galaxy', ''], ['system', '19'], ['planet', '7'], ['planet_type', '3']]) {
   const previous = coordinates.fields[name].value;
   coordinates.fields[name].value = value;
   coordinates.context.shortInfo();
@@ -125,19 +113,16 @@ for (const [name, value] of [['galaxy', '1'], ['galaxy', ''], ['system', '19'], 
   coordinates.context.shortInfo();
   assert.equal(coordinates.nodes.zero_galaxy_attack_budget.hidden, false);
 }
-assert.equal(coordinates.form.action, 'fleet.php?fleet_page=2');
-assert.equal(coordinates.fields.system.readOnly, false);
-assert.equal(coordinates.fields.planet_type.disabled, false);
 
 const confirmation = fixture({step: 2, fixedFleet: {206: '6'}});
 assert.equal(confirmation.button.disabled, true);
-for (const mission of [6, 8]) {
+for (const mission of [2, 6, 8]) {
   confirmation.mission(mission);
-  assert.equal(confirmation.nodes.zero_galaxy_attack_budget.hidden, true, 'Spy and recycling are not attack-budget missions');
+  assert.equal(confirmation.nodes.zero_galaxy_attack_budget.hidden, true, 'Only a solo attack has an attack budget');
   assert.equal(confirmation.button.disabled, false);
   assert.equal(confirmation.fire('submit').prevented, false);
 }
-confirmation.mission(2);
+confirmation.mission(1);
 assert.equal(confirmation.nodes.zero_galaxy_attack_budget.hidden, false);
 assert.equal(confirmation.button.disabled, true);
 const ordinary = fixture({step: 2, target: null, noBigInt: true});
@@ -151,14 +136,4 @@ const nativeBlocked = fixture({step: 2, disabled: true});
 nativeBlocked.mission(6);
 assert.equal(nativeBlocked.button.disabled, true, 'Keep the native disabled state');
 
-const acs = fixture({step: 1, mission: 0, groupId: 7, groupArrival: 2000000000,
-  fields: {fleet_group: 7}, fixedFleet: {206: '3'}, existingFleet: {206: '3'}});
-assert.equal(acs.nodes.zero_galaxy_attack_budget.hidden, false, 'A selected native ACS defaults to attack mission');
-assert.equal(acs.nodes.zero_galaxy_attack_selected.textContent, '120 очк.', 'Count existing fleets of the same player');
-acs.fields.speed.value = '5'; acs.context.shortInfo();
-assert.equal(acs.nodes.time_src.textContent, new Date((2000000000 + 120) * 1000).toLocaleString(undefined, {timeZone: 'UTC'}));
-acs.fields.fleet_group.value = '8'; acs.context.shortInfo();
-assert.equal(acs.nodes.zero_galaxy_acs_arrival.hidden, true);
-assert.equal(acs.nodes.time_dst.textContent, 'native preview', 'Changing group restores the native ETA until the next server step');
-
-console.log('Fleet form: native routing, contextual caps, editable targets, mission switches, exact costs and ACS previews passed; no browser.');
+console.log('Fleet form: native routing, solo attack caps, editable targets, mission switches and exact costs passed; no browser.');
