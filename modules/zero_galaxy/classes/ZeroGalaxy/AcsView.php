@@ -13,15 +13,15 @@ class AcsView {
       }));
       $template->assign_var('ZERO_GALAXY_ACS_FILTERED', true);
     } elseif ($adapter->isNative('flying_fleets')) {
-      $hasZeroFleet = false;
-      $adapter->mapRows('fleets', static function (array $row) use (&$hasZeroFleet): array {
-        $zero = preg_match('/^\[0:[0-9]+:[0-9]+\]$/D', (string) ($row['END_COORDS'] ?? '')) === 1;
-        $row['ZERO_ACS_ALLOWED'] = !$zero;
-        $hasZeroFleet = $hasZeroFleet || $zero;
-        return $row;
-      });
-      if ($hasZeroFleet) {
-        $template->assign_var('ZERO_GALAXY_ACS_FILTERED', true);
+      $zeroFleets = [];
+      foreach ($adapter->rows('fleets') as $row) {
+        if (preg_match('/^\[0:[0-9]+:[0-9]+\]$/D', (string) ($row['END_COORDS'] ?? ''))) {
+          $zeroFleets[] = (int) $row['ID'];
+        }
+      }
+      if ($zeroFleets) {
+        // The native list stays intact; the wrapper only hides its group buttons for these fleets.
+        $template->assign_vars(['ZERO_GALAXY_ACS_FILTERED' => true, 'ZERO_ACS_BLOCKED_JSON' => json_encode($zeroFleets)]);
         return $adapter->wrap($module, 'zero_galaxy_flying_fleets');
       }
     }

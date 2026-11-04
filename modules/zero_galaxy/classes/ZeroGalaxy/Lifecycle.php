@@ -12,11 +12,12 @@ class Lifecycle {
     'eisplanet06',
   ];
 
-  public static function create(int $now, array $settings): array {
-    $opensAt = $now + random_int($settings['energy_seconds'][0], $settings['energy_seconds'][1]);
-    $unstableAt = $opensAt + random_int($settings['active_seconds'][0], $settings['active_seconds'][1]);
-    $closesAt = $unstableAt + random_int($settings['unstable_seconds'][0], $settings['unstable_seconds'][1]);
-    $disappearsAt = $closesAt + random_int($settings['closed_seconds'][0], $settings['closed_seconds'][1]);
+  /** @param array $ranges Settings::categoryPhaseRanges() of the rift category. */
+  public static function create(int $now, array $ranges): array {
+    $opensAt = $now + random_int(...$ranges['energy_seconds']);
+    $unstableAt = $opensAt + random_int(...$ranges['active_seconds']);
+    $closesAt = $unstableAt + random_int(...$ranges['unstable_seconds']);
+    $disappearsAt = $closesAt + random_int(...$ranges['closed_seconds']);
 
     return [
       'born_at' => $now,
@@ -45,6 +46,11 @@ class Lifecycle {
     return 'closed';
   }
 
+  /** Only active and unstable rifts have a native planet that can be scouted or attacked. */
+  public static function hasPlanet(string $phase): bool {
+    return $phase === 'active' || $phase === 'unstable';
+  }
+
   public static function nextTransition(array $rift, int $now): int {
     if (self::phase($rift, $now) === '') {
       return 0;
@@ -60,20 +66,14 @@ class Lifecycle {
   }
 
   public static function expectedBirths(array $settings, int $interval): float {
-    $activeAverage = ($settings['active_seconds'][0] + $settings['active_seconds'][1]) / 2;
-    $unstableAverage = ($settings['unstable_seconds'][0] + $settings['unstable_seconds'][1]) / 2;
-    if (!empty($settings['categories'])) {
-      $weightedDuration = $weight = 0;
-      foreach ($settings['categories'] as $category) {
-        if ($category['weight'] <= 0 || $category['limit'] === 0) { continue; }
-        $ranges = Settings::categoryPhaseRanges($category);
-        $weightedDuration += $category['weight'] * (($ranges['active_seconds'][0] + $ranges['active_seconds'][1]
-          + $ranges['unstable_seconds'][0] + $ranges['unstable_seconds'][1]) / 2);
-        $weight += $category['weight'];
-      }
-      return $weight > 0 ? $settings['target_active_per_system'] * $interval / ($weightedDuration / $weight) : 0.0;
+    $weightedDuration = $weight = 0;
+    foreach ($settings['categories'] as $category) {
+      if ($category['weight'] <= 0 || $category['limit'] === 0) { continue; }
+      $ranges = Settings::categoryPhaseRanges($category);
+      $weightedDuration += $category['weight']
+        * (array_sum($ranges['active_seconds']) + array_sum($ranges['unstable_seconds'])) / 2;
+      $weight += $category['weight'];
     }
-
-    return $settings['target_active_per_system'] * $interval / ($activeAverage + $unstableAverage);
+    return $weight > 0 ? $settings['target_active_per_system'] * $interval / ($weightedDuration / $weight) : 0.0;
   }
 }

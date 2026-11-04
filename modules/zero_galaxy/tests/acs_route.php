@@ -9,17 +9,12 @@ namespace Modules {
 }
 
 namespace {
-  if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
-  define('INSIDE', true);
-  define('INITIAL_PAGE', 'fleet');
-  define('SN_ROOT_RELATIVE', '/');
+  require __DIR__ . '/support/bootstrap.php';
+  zgCoreConstants('fleet');
   define('SN_ROOT_VIRTUAL', 'http://localhost:8080/');
-  define('SN_TIME_NOW', 1700000000);
-  require __DIR__ . '/support/autoload.php';
-  require dirname(__DIR__, 3) . '/includes/general/general_params.php';
-  require dirname(__DIR__, 3) . '/includes/general/general_validators.php';
+  require SN_ROOT_PHYSICAL . 'includes/general/general_params.php';
+  require SN_ROOT_PHYSICAL . 'includes/general/general_validators.php';
   require dirname(__DIR__) . '/zero_galaxy.php';
-  require __DIR__ . '/support/assertions.php';
 
   class SN {
     public static $db;
@@ -77,7 +72,7 @@ namespace {
   $worldError = new \ReflectionProperty(zero_galaxy::class, 'worldError'); $worldError->setAccessible(true);
   SN::$db = new AcsRouteFixtureDb();
   $oldLog = ini_set('error_log', '/dev/null');
-  try { $fallback = $effective->invoke($module); $update->invoke($module, false, false); }
+  try { $fallback = $effective->invoke($module); $update->invoke($module, false); }
   finally { ini_set('error_log', $oldLog); }
   $check(!isset($fallback['categories']['custom']) && $storage->getValue($module) === null
     && $worldError->getValue($module) instanceof \InvalidArgumentException && SN::$db->queries === [],

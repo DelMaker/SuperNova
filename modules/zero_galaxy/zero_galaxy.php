@@ -1,17 +1,18 @@
 <?php
 
 use Modules\sn_module;
-use ZeroGalaxy\Settings;
+use ZeroGalaxy\AcsView;
+use ZeroGalaxy\AdminView;
+use ZeroGalaxy\AjaxFleetSender;
+use ZeroGalaxy\Input;
+use ZeroGalaxy\NativeFleetForm;
+use ZeroGalaxy\NPCStatistics;
 use ZeroGalaxy\Profile;
 use ZeroGalaxy\RiftFleetDispatcher;
-use ZeroGalaxy\NPCStatistics;
-use ZeroGalaxy\SpySender;
-use ZeroGalaxy\RecycleSender;
-use ZeroGalaxy\NativeFleetForm;
+use ZeroGalaxy\Settings;
+use ZeroGalaxy\Sql;
 use ZeroGalaxy\Storage;
 use ZeroGalaxy\UniverseView;
-use ZeroGalaxy\AdminView;
-use ZeroGalaxy\AcsView;
 
 class zero_galaxy extends sn_module {
   public $versionCommitted = '';
@@ -23,12 +24,9 @@ class zero_galaxy extends sn_module {
   public function __construct($filename = __FILE__) {
     $this->manifest['package'] = 'universe';
     $this->manifest['name'] = 'zero_galaxy';
-    $this->manifest['version'] = '0.7.2';
+    $this->manifest['version'] = '0.8.0';
     $this->manifest['mvc']['model'][''] = ['callable' => 'route'];
     $this->manifest['mvc']['view']['zero_galaxy'] = ['callable' => 'render'];
-    $this->manifest['mvc']['view']['zero_galaxy_spy'] = ['callable' => 'sendSpy'];
-    $this->manifest['mvc']['view']['zero_galaxy_recycle'] = ['callable' => 'sendRecyclers'];
-    $this->manifest['mvc']['view']['zero_galaxy_attack'] = ['callable' => 'attack'];
     $this->manifest['mvc']['view'][''] = ['callable' => 'decorateView'];
     $this->manifest['menu']['menu_zero_galaxy'] = [
       'LEVEL' => 'submenu',
@@ -68,21 +66,18 @@ class zero_galaxy extends sn_module {
     }
 
     // Signed fleet workers run before the normal authenticated model hook.
-    // Reconcile NPC deadlines before the native dispatcher looks up its targets.
+    // Reconcile due NPC deadlines before the native dispatcher looks up its targets.
     if (INITIAL_PAGE === 'worker' && sys_get_param_str('mode') === 'dispatchFleets'
       && SN::$gc->request->url->isSigned()) {
       // Other modules have not finished initialization yet. Reconcile deadlines
       // here, but resolve the dispatcher only on later routes/views.
-      $this->updateWorld(true, false);
+      $this->updateWorld(false);
     }
   }
 
   protected function __assign_vars() {
     return [
       'sn_mvc[pages][zero_galaxy]' => ['filename' => '', 'options' => []],
-      'sn_mvc[pages][zero_galaxy_spy]' => ['filename' => '', 'options' => []],
-      'sn_mvc[pages][zero_galaxy_recycle]' => ['filename' => '', 'options' => []],
-      'sn_mvc[pages][zero_galaxy_attack]' => ['filename' => '', 'options' => []],
     ];
   }
 
@@ -92,8 +87,10 @@ class zero_galaxy extends sn_module {
     }
     $this->routeNativeAcs();
     NativeFleetForm::intercept();
-    $this->updateWorld((INITIAL_PAGE === 'fleet' && sys_get_param_int('galaxy', -1) === 0)
-      || in_array(INITIAL_PAGE, ['zero_galaxy_spy', 'zero_galaxy_attack', 'zero_galaxy_recycle'], true));
+    $this->updateWorld();
+    if (INITIAL_PAGE === 'flotenajax' && Input::int($_POST['galaxy'] ?? null) === 0) {
+      $this->sendQuickMission();
+    }
 
     $galaxy = $_POST['galaxy'] ?? $_GET['galaxy'] ?? null;
     if (INITIAL_PAGE === 'galaxy' && is_scalar($galaxy)
@@ -152,7 +149,7 @@ class zero_galaxy extends sn_module {
     return !$this->worldError && $this->storage !== null;
   }
 
-  private function updateWorld($force = false, $checkDispatcher = true) {
+  private function updateWorld(bool $checkDispatcher = true): void {
     try {
       if ($checkDispatcher) {
         $this->requireDispatcher();
@@ -162,11 +159,13 @@ class zero_galaxy extends sn_module {
         // A fallback must never remove categories missing from the defaults.
         if ($this->settingsError) { throw $this->settingsError; }
         Profile::validateSettings($this->settings);
-        $this->storage = new Storage(SN::$db->link, SN::$db->db_prefix);
+        $this->storage = new Storage(Sql::fromGame());
       }
-      $this->storage->tick(SN_TIME_NOW, $this->settings,
-        max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet), $force);
-      NPCStatistics::sync(SN::$db->link, SN::$db->db_prefix, SN::$config);
+      // Only a reconciliation can create or retire NPCs, so only it needs the ranking sync.
+      if ($this->storage->tick(SN_TIME_NOW, $this->settings,
+        max(1, (int) SN::$config->game_maxSystem), max(1, (int) SN::$config->game_maxPlanet))) {
+        NPCStatistics::sync(Sql::fromGame(), SN::$config);
+      }
       $this->worldError = null;
     } catch (Throwable $error) {
       $this->worldError = $error;
@@ -196,11 +195,9 @@ class zero_galaxy extends sn_module {
     }
   }
 
-  public function sendSpy($template = null) {
-    $this->sendAjax(SpySender::class);
-  }
-
-  private function sendAjax(string $sender): void {
+  /** The native universe doit() posts galaxy 0 to flotenajax.php, whose own checks reject it. */
+  private function sendQuickMission(): void {
+    global $user;
     if (!defined('IN_AJAX')) {
       define('IN_AJAX', true);
     }
@@ -209,45 +206,24 @@ class zero_galaxy extends sn_module {
       http_response_code(503);
       die(SN::$lang['zero_galaxy_unavailable']);
     }
-
-    die($sender::send($this->storage, $this->settings));
-  }
-
-  public function attack($template = null) {
-    if (!$this->worldReady()) {
-      SnTemplate::messageBox(SN::$lang['zero_galaxy_unavailable'], SN::$lang['zero_galaxy_title']);
-    }
-    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
-      SnTemplate::messageBox(SN::$lang['zero_galaxy_attack_bad_request'], SN::$lang['fl_error']);
-    }
-    if (sys_get_param_id('acs_group') || sys_get_param_id('fleet_group')) {
-      SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
-    }
-    $rift = $this->storage->findById((int) sys_get_param_id('rift_id'), SN_TIME_NOW);
-    if (!$rift) {
-      SnTemplate::messageBox(SN::$lang['zero_galaxy_attack_missing'], SN::$lang['fl_error']);
-    }
-    sys_redirect(SN_ROOT_RELATIVE . 'fleet.php?galaxy=0&system=' . (int) $rift['system']
-      . '&planet=' . (int) $rift['position'] . '&planet_type=' . PT_PLANET
-      . '&target_mission=' . MT_ATTACK);
-    return $template;
-  }
-
-  public function sendRecyclers($template = null) {
-    $this->sendAjax(RecycleSender::class);
+    // This early response replaces the rest of init.php and common.php.
+    SN::$gc->watchdog->execute();
+    StatUpdateLauncher::scheduler_process();
+    sys_user_vacation($user);
+    SetSelectedPlanet($user);
+    die(AjaxFleetSender::send());
   }
 
   public function decorateView($template = null) {
     if (AdminView::appliesTo($template)) {
       try {
-        AdminView::filter($template, SN::$db->link, SN::$db->db_prefix);
+        AdminView::filter($template, Sql::fromGame());
       } catch (Throwable $error) {
         // A display filter must not make the native administration unavailable.
         error_log('Zero Galaxy admin list: ' . $error->getMessage());
       }
     }
     $template = AcsView::decorate($this, $template);
-    return NativeFleetForm::decorate($this, $template, $this->effectiveSettings(),
-      $this->worldError ? null : $this->storage);
+    return NativeFleetForm::decorate($this, $template, $this->worldError ? null : $this->storage);
   }
 }

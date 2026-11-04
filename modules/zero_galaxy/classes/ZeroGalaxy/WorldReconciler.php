@@ -2,6 +2,8 @@
 
 namespace ZeroGalaxy;
 
+use RuntimeException;
+
 class WorldReconciler {
   private $records;
   private $bodies;
@@ -13,41 +15,44 @@ class WorldReconciler {
     $this->createProfile = $createProfile;
   }
 
-  public function tick(int $now, array $settings, int $maxSystem, int $maxPlanet, bool $force = false): void {
+  /** @return bool False when the schedule was not due and nothing changed. */
+  public function tick(int $now, array $settings, int $maxSystem, int $maxPlanet, bool $force = false): bool {
+    if (!$force && (int) $this->records->state()['next_tick_at'] > $now) {
+      return false;
+    }
     $this->records->assertOutsideTransaction();
-    $state = $this->records->state();
-    if (!$force && (int) $state['next_tick_at'] > $now) { return; }
-    $this->records->transaction(function () use ($now, $settings, $maxSystem, $maxPlanet, $force): void {
+    return $this->records->transaction(function () use ($now, $settings, $maxSystem, $maxPlanet, $force): bool {
       $state = $this->records->state(true);
       if (!$force && (int) $state['next_tick_at'] > $now) {
-        return;
+        return false;
       }
-      $legacyOwnerId = (int) $state['npc_owner_id'];
-      $owners = $this->bodies->syncOwners($settings['categories'], $state, $now);
+      $owners = $this->bodies->syncOwners($settings['categories'], $now);
+      $rifts = $this->records->allForUpdate();
+      $planets = $this->bodies->lockPlanets($rifts);
       $occupied = [];
       $categoryCounts = [];
       $nextTransition = $now + $settings['tick_seconds'];
-      foreach ($this->records->allForUpdate() as $rift) {
-        $phase = Lifecycle::phase($rift, $now);
-        $profile = Profile::read($rift);
-        $ownerId = (int) ($rift['npc_owner_id'] ?? 0) ?: $legacyOwnerId;
-        $key = $profile['category']['key'] ?? '';
+      foreach ($rifts as $rift) {
+        $riftId = (int) $rift['rift_id'];
+        $ownerId = (int) $rift['npc_owner_id'];
+        $planet = $planets[$riftId] ?? null;
+        $key = Profile::read($rift)['category']['key'] ?? '';
         if (!isset($owners[$key])) {
-          $planet = $this->bodies->planet($rift, $ownerId);
           $this->bodies->removePlanet($rift, $ownerId, $planet);
-          $this->records->delete((int) $rift['rift_id']);
+          $this->records->delete($riftId);
           continue;
         }
-        $this->bodies->assignOwner($rift, $owners[$key], $legacyOwnerId);
-        $ownerId = $owners[$key];
-        $planet = $this->bodies->planet($rift, $ownerId);
-        if ($phase === 'active' || $phase === 'unstable') {
+        if ($ownerId !== $owners[$key]) {
+          throw new RuntimeException('Zero Galaxy rift owner differs from its category NPC; refusing to alter it');
+        }
+        $phase = Lifecycle::phase($rift, $now);
+        if (Lifecycle::hasPlanet($phase)) {
           $this->bodies->materialize($rift, $ownerId, $now, $phase, $planet);
         } else {
           $this->bodies->removePlanet($rift, $ownerId, $planet);
         }
         if ((int) $rift['disappears_at'] <= $now) {
-          $this->records->delete((int) $rift['rift_id']);
+          $this->records->delete($riftId);
           continue;
         }
         $occupied[(int) $rift['system']][(int) $rift['position']] = true;
@@ -57,7 +62,7 @@ class WorldReconciler {
           $nextTransition = min($nextTransition, $deadline);
         }
       }
-      $this->bodies->removeUnusedOwners();
+      $this->bodies->finish($now);
 
       $maxSystem = max(1, $maxSystem);
       $maxPlanet = max(1, $maxPlanet);
@@ -79,9 +84,8 @@ class WorldReconciler {
           $profile = ($this->createProfile)($categoryKey, $category, $settings['fleet_limit_multiplier']);
           $snapshotData = ['profile' => $profile, 'category_settings' => $category,
             'fleet_limit_multiplier' => $settings['fleet_limit_multiplier']];
-          $birthSettings = array_replace($settings, Settings::categoryPhaseRanges($category));
           $categoryCounts[$categoryKey] = ($categoryCounts[$categoryKey] ?? 0) + 1;
-          $rift = Lifecycle::create($now, $birthSettings);
+          $rift = Lifecycle::create($now, Settings::categoryPhaseRanges($category));
           $rift['npc_owner_id'] = $owners[$categoryKey];
           $this->records->insert($rift, $system, $free[$i], $snapshotData);
           $nextTransition = min($nextTransition, $rift['opens_at']);
@@ -93,6 +97,7 @@ class WorldReconciler {
       $nextTick = min($nextTransition, $nextGeneration);
       $seededSystems = max($maxSystem, (int) $state['seeded_systems']);
       $this->records->schedule($nextTick, $nextGeneration, $seededSystems);
+      return true;
     });
   }
 

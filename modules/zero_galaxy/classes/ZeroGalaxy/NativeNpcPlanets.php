@@ -5,210 +5,200 @@ namespace ZeroGalaxy;
 use RuntimeException;
 
 class NativeNpcPlanets implements WorldBodies {
-  private $records;
-  private $rifts;
-  private $state;
-  private $users;
-  private $planets;
-  private $units;
-  private $npcs;
-  private $fleets;
+  private $sql;
   private $owners = [];
   private $knownOwners = [];
-  private $legacyOwnerId = 0;
+  private $refresh = [];
 
-  public function __construct(RiftRepositorySql $records) {
-    $this->records = $records;
-    foreach (['rifts' => 'zero_galaxy_rifts', 'state' => 'zero_galaxy_state', 'npcs' => 'zero_galaxy_npcs',
-      'users' => 'users', 'planets' => 'planets', 'units' => 'unit', 'fleets' => 'fleets'] as $property => $table) {
-      $this->$property = $records->table($table);
-    }
-  }
+  public function __construct(Sql $sql) { $this->sql = $sql; }
 
-  public function syncOwners(array $categories, array $state, int $now): array {
-    $this->owners = $this->knownOwners = [];
-    $this->legacyOwnerId = (int) $state['npc_owner_id'];
+  public function syncOwners(array $categories, int $now): array {
+    $this->owners = $this->knownOwners = $this->refresh = [];
     $registered = [];
-    $rows = $this->records->query("SELECT u.*, n.category_key FROM {$this->npcs} n
-      JOIN {$this->users} u ON u.id = n.owner_id ORDER BY u.id FOR UPDATE");
+    $rows = $this->sql->query('SELECT u.*, n.category_key FROM ' . $this->sql->table('zero_galaxy_npcs') . ' n
+      JOIN ' . $this->sql->table('users') . ' u ON u.id = n.owner_id ORDER BY u.id FOR UPDATE');
     while ($owner = $rows->fetch_assoc()) {
       $this->verifyOwner($owner);
       $registered[$owner['category_key']] = (int) $owner['id'];
     }
-    if ($this->legacyOwnerId && !isset($this->knownOwners[$this->legacyOwnerId])) {
-      $owner = $this->records->query("SELECT * FROM {$this->users} WHERE id = {$this->legacyOwnerId} FOR UPDATE")->fetch_assoc();
-      $this->verifyOwner($owner);
-    }
     foreach ($categories as $key => $category) {
-      $ownerId = $registered[$key] ?? $this->createOwner($key, $category['name'], $now);
-      $this->owners[$key] = $ownerId;
-      $this->syncTech($ownerId, $category['tech']);
-      $this->records->query("UPDATE {$this->users} SET onlinetime = {$now} WHERE id = {$ownerId}");
+      $this->owners[$key] = $registered[$key] ?? $this->createOwner($key, $category['name'], $now);
+    }
+    if ($this->owners) {
+      $this->syncTech($categories);
+      $this->sql->query('UPDATE ' . $this->sql->table('users') . " SET onlinetime = {$now}
+        WHERE id IN (" . implode(',', $this->owners) . ')');
     }
     return $this->owners;
   }
 
-  private function verifyOwner(?array $owner): void {
-    if (!$owner || (int) $owner['user_bot'] !== Storage::NPC_BOT_TYPE || (int) $owner['authlevel'] !== 0
-      || (int) $owner['galaxy'] !== 0 || (int) $owner['id_planet'] !== 0 || (int) $owner['current_planet'] !== 0
-      || (int) $owner['parent_account_id'] !== 0 || (int) $owner['parent_account_global'] !== 0
-      || strlen($owner['password']) !== 64 || $owner['password'][0] !== '!') {
+  private function verifyOwner(array $owner): void {
+    if (!Npc::matches($owner) || (int) $owner['galaxy'] !== 0 || (int) $owner['id_planet'] !== 0
+      || (int) $owner['current_planet'] !== 0 || strlen($owner['password']) !== 64 || $owner['password'][0] !== '!') {
       throw new RuntimeException('Zero Galaxy NPC identity is invalid');
     }
     $this->knownOwners[(int) $owner['id']] = true;
   }
 
   private function createOwner(string $key, string $categoryName, int $now): int {
-    $categoryName = preg_replace('/[\x{10000}-\x{10FFFF}]/u', "\u{FFFD}", $categoryName);
-    preg_match('/^.{1,32}/us', Storage::NPC_NAME . ' ' . $categoryName, $match);
-    $name = $this->records->escape($match[0]);
-    while ($this->records->query("SELECT id FROM {$this->users} WHERE username = '{$name}' LIMIT 1")->num_rows) {
+    $users = $this->sql->table('users');
+    $name = $this->sql->escape(RiftName::npc($categoryName));
+    while ($this->sql->query("SELECT id FROM {$users} WHERE username = '{$name}' LIMIT 1")->num_rows) {
       $name = 'Rift ' . bin2hex(random_bytes(8));
     }
     // A non-MD5 sentinel disables the native legacy login; no account is created.
     $password = '!' . bin2hex(random_bytes(31)) . '!';
-    $this->records->query("INSERT INTO {$this->users}
+    $this->sql->query("INSERT INTO {$users}
       (username, password, salt, authlevel, user_bot, galaxy, system, planet, id_planet, current_planet,
        parent_account_id, parent_account_global, register_time, onlinetime, vacation, deltime, email, email_2)
-      VALUES ('{$name}', '{$password}', '', 0, " . Storage::NPC_BOT_TYPE . ", 0, 0, 0, 0, 0,
+      VALUES ('{$name}', '{$password}', '', 0, " . Npc::BOT_TYPE . ", 0, 0, 0, 0, 0,
         0, 0, {$now}, {$now}, 0, 0, '', '')");
-    $ownerId = $this->records->insertId();
-    $key = $this->records->escape($key);
-    $this->records->query("INSERT INTO {$this->npcs} (owner_id, category_key) VALUES ({$ownerId}, '{$key}')");
+    $ownerId = $this->sql->insertId();
+    $this->sql->query('INSERT INTO ' . $this->sql->table('zero_galaxy_npcs') . " (owner_id, category_key)
+      VALUES ({$ownerId}, '" . $this->sql->escape($key) . "')");
     $this->knownOwners[$ownerId] = true;
     return $ownerId;
   }
 
-  private function syncTech(int $ownerId, array $tech): void {
+  /** Research belongs to the category NPC and follows the current settings. */
+  private function syncTech(array $categories): void {
+    $units = $this->sql->table('unit');
     $levels = [];
-    $where = "unit_player_id = {$ownerId} AND unit_location_type = 4 AND unit_location_id = {$ownerId} AND unit_type = 100";
-    $rows = $this->records->query("SELECT unit_snid, unit_level FROM {$this->units} WHERE {$where} FOR UPDATE");
-    while ($row = $rows->fetch_assoc()) { $levels[(int) $row['unit_snid']] = (int) $row['unit_level']; }
-    $tech = array_filter($tech);
-    if ($levels == $tech) { return; }
-    $this->records->query("DELETE FROM {$this->units} WHERE {$where}");
-    foreach ($tech as $id => $level) {
-      $this->records->query("INSERT INTO {$this->units}
-        (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
-        VALUES ({$ownerId}, 4, {$ownerId}, 100, " . (int) $id . ", " . (int) $level . ")");
+    $rows = $this->sql->query("SELECT unit_player_id, unit_snid, unit_level FROM {$units}
+      WHERE unit_player_id IN (" . implode(',', $this->owners) . ")
+        AND unit_location_type = 4 AND unit_location_id = unit_player_id AND unit_type = 100 FOR UPDATE");
+    while ($row = $rows->fetch_assoc()) {
+      $levels[(int) $row['unit_player_id']][(int) $row['unit_snid']] = (int) $row['unit_level'];
     }
-  }
-
-  public function assignOwner(array &$rift, int $ownerId, int $legacyOwnerId): void {
-    $oldOwnerId = (int) ($rift['npc_owner_id'] ?? 0) ?: $legacyOwnerId;
-    if ($oldOwnerId === $ownerId) { return; }
-    if ($oldOwnerId && !isset($this->knownOwners[$oldOwnerId])) {
-      throw new RuntimeException('Zero Galaxy rift has an unregistered owner');
-    }
-    $planet = $this->planet($rift, $oldOwnerId);
-    if ($planet) {
-      $planetId = (int) $planet['id'];
-      $this->records->query("UPDATE {$this->units} SET unit_player_id = {$ownerId}
-        WHERE unit_location_type = 1 AND unit_location_id = {$planetId} AND unit_player_id = {$oldOwnerId}");
-      $this->records->query("UPDATE {$this->planets} SET id_owner = {$ownerId} WHERE id = {$planetId}");
-    }
-    $this->records->query("UPDATE {$this->fleets} SET fleet_target_owner = {$ownerId}
-      WHERE fleet_target_owner = {$oldOwnerId} AND fleet_end_galaxy = 0
-        AND fleet_end_system = " . (int) $rift['system'] . " AND fleet_end_planet = " . (int) $rift['position']);
-    $this->records->query("UPDATE {$this->rifts} SET npc_owner_id = {$ownerId} WHERE rift_id = " . (int) $rift['rift_id']);
-    $rift['npc_owner_id'] = $ownerId;
-  }
-
-  public function planet(array $rift, int $ownerId): ?array {
-    $planetId = (int) $rift['planet_id'];
-    if (!$planetId) {
-      return null;
-    }
-    if (!isset($this->knownOwners[$ownerId])) {
-      throw new RuntimeException('Zero Galaxy planet has an unregistered owner');
-    }
-    $planet = $this->records->query("SELECT * FROM {$this->planets} WHERE id = {$planetId} FOR UPDATE")->fetch_assoc();
-    if (!$planet) {
-      return null;
-    }
-    if ((int) $planet['id_owner'] !== $ownerId || (int) $planet['galaxy'] !== 0
-      || (int) $planet['system'] !== (int) $rift['system'] || (int) $planet['planet'] !== (int) $rift['position']
-      || (int) $planet['planet_type'] !== 1) {
-      throw new RuntimeException('Zero Galaxy planet ownership or coordinates changed; refusing to alter it');
-    }
-    return $planet;
-  }
-
-  public function removeUnusedOwners(): void {
-    foreach (array_diff(array_keys($this->knownOwners), array_values($this->owners)) as $ownerId) {
-      if ($this->records->query("SELECT id FROM {$this->planets} WHERE id_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows
-        || $this->records->query("SELECT fleet_id FROM {$this->fleets} WHERE fleet_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows) {
-        throw new RuntimeException('Zero Galaxy retired NPC still owns planets or fleets');
+    foreach ($this->owners as $key => $ownerId) {
+      $tech = array_filter($categories[$key]['tech']);
+      if (($levels[$ownerId] ?? []) == $tech) { continue; }
+      $this->sql->query("DELETE FROM {$units} WHERE unit_player_id = {$ownerId} AND unit_location_type = 4
+        AND unit_location_id = {$ownerId} AND unit_type = 100");
+      $values = [];
+      foreach ($tech as $id => $level) {
+        $values[] = "({$ownerId}, 4, {$ownerId}, 100, " . (int) $id . ', ' . (int) $level . ')';
       }
-      $this->records->query("UPDATE {$this->fleets} SET fleet_target_owner = 0 WHERE fleet_target_owner = {$ownerId}");
-      $this->records->query("DELETE FROM {$this->units} WHERE unit_player_id = {$ownerId}");
-      $this->records->query("DELETE FROM {$this->users} WHERE id = {$ownerId}");
-      $this->records->query("DELETE FROM {$this->npcs} WHERE owner_id = {$ownerId}");
+      if ($values) {
+        $this->sql->query("INSERT INTO {$units}
+          (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level) VALUES " . implode(', ', $values));
+      }
     }
-    if ($this->legacyOwnerId) {
-      $this->records->query("UPDATE {$this->state} SET npc_owner_id = 0 WHERE id = 1");
+  }
+
+  public function lockPlanets(array $rifts): array {
+    $ids = [];
+    foreach ($rifts as $rift) {
+      if ((int) $rift['planet_id']) { $ids[] = (int) $rift['planet_id']; }
     }
+    $rows = [];
+    if ($ids) {
+      $result = $this->sql->query('SELECT * FROM ' . $this->sql->table('planets') . ' WHERE id IN ('
+        . implode(',', $ids) . ') ORDER BY id FOR UPDATE');
+      while ($planet = $result->fetch_assoc()) { $rows[(int) $planet['id']] = $planet; }
+    }
+    $planets = [];
+    foreach ($rifts as $rift) {
+      $planet = $rows[(int) $rift['planet_id']] ?? null;
+      if (!$planet) { continue; }
+      $ownerId = (int) $rift['npc_owner_id'];
+      if (!isset($this->knownOwners[$ownerId]) || (int) $planet['id_owner'] !== $ownerId
+        || (int) $planet['galaxy'] !== 0 || (int) $planet['planet_type'] !== 1
+        || (int) $planet['system'] !== (int) $rift['system'] || (int) $planet['planet'] !== (int) $rift['position']) {
+        throw new RuntimeException('Zero Galaxy planet ownership or coordinates changed; refusing to alter it');
+      }
+      $planets[(int) $rift['rift_id']] = $planet;
+    }
+    return $planets;
+  }
+
+  public function materialize(array $rift, int $ownerId, int $now, string $phase, ?array $planet): void {
+    $planets = $this->sql->table('planets');
+    $name = RiftName::forRift($rift, $phase);
+    if ($planet) {
+      // Never refill an existing garrison or its loot; finish() only freezes native income.
+      $this->refresh[] = (int) $planet['id'];
+      if ($planet['name'] !== $name) {
+        $this->sql->query("UPDATE {$planets} SET name = '" . $this->sql->escape($name) . "' WHERE id = " . (int) $planet['id']);
+      }
+      return;
+    }
+    $system = (int) $rift['system'];
+    $position = (int) $rift['position'];
+    if ($this->sql->one("SELECT id FROM {$planets} WHERE galaxy = 0
+      AND system = {$system} AND planet = {$position} LIMIT 1 FOR UPDATE")) {
+      throw new RuntimeException('Zero Galaxy coordinates are occupied; refusing to replace another planet');
+    }
+    $profile = Profile::read($rift);
+    $resources = array_map('intval', ($profile['resources'] ?? []) + [901 => 0, 902 => 0, 903 => 0]);
+    $this->sql->query("INSERT INTO {$planets}
+      (name, id_owner, galaxy, system, planet, planet_type, image, last_update, que_processed,
+       metal, crystal, deuterium, metal_perhour, crystal_perhour, deuterium_perhour,
+       energy_max, energy_used, metal_max, crystal_max, deuterium_max,
+       field_current, position_original, field_max_original, temp_min_original, temp_max_original)
+      VALUES ('" . $this->sql->escape($name) . "', {$ownerId}, 0, {$system}, {$position}, 1,
+        '" . $this->sql->escape($rift['image']) . "', {$now}, {$now},
+        {$resources[901]}, {$resources[902]}, {$resources[903]}, 0, 0, 0, 0, 0, 0, 0, 0, 0, {$position}, 163, 0, 40)");
+    $planetId = $this->sql->insertId();
+    $units = [];
+    foreach ([200 => 'fleet', 400 => 'defence'] as $type => $group) {
+      foreach ($profile[$group] ?? [] as $id => $count) {
+        $units[] = "({$ownerId}, 1, {$planetId}, {$type}, " . (int) $id . ', ' . (int) $count . ')';
+      }
+    }
+    if ($units) {
+      $this->sql->query('INSERT INTO ' . $this->sql->table('unit') . '
+        (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level) VALUES ' . implode(', ', $units));
+    }
+    $this->sql->query('UPDATE ' . $this->sql->table('zero_galaxy_rifts') . " SET planet_id = {$planetId}
+      WHERE rift_id = " . (int) $rift['rift_id']);
   }
 
   public function removePlanet(array $rift, int $ownerId, ?array $planet): void {
     $planetId = (int) $rift['planet_id'];
     if ($planet) {
-      $foreignUnit = $this->records->query("SELECT unit_id FROM {$this->units} WHERE unit_location_type = 1
+      $units = $this->sql->table('unit');
+      $foreignUnit = $this->sql->one("SELECT unit_id FROM {$units} WHERE unit_location_type = 1
         AND unit_location_id = {$planetId} AND (unit_player_id IS NULL OR unit_player_id <> {$ownerId})
-        LIMIT 1 FOR UPDATE")->fetch_assoc();
+        LIMIT 1 FOR UPDATE");
       if ($foreignUnit) {
         throw new RuntimeException('Zero Galaxy planet contains units of another owner; refusing deletion');
       }
-      $this->records->query("DELETE FROM {$this->units} WHERE unit_location_type = 1
+      $this->sql->query("DELETE FROM {$units} WHERE unit_location_type = 1
         AND unit_location_id = {$planetId} AND unit_player_id = {$ownerId}");
       // Native FK nulls the target ID, retaining incoming fleets and their times.
-      $this->records->query("DELETE FROM {$this->planets} WHERE id = {$planetId} AND id_owner = {$ownerId}
-        AND galaxy = 0 AND system = " . (int) $rift['system'] . " AND planet = " . (int) $rift['position'] . " AND planet_type = 1");
+      $this->sql->query('DELETE FROM ' . $this->sql->table('planets') . " WHERE id = {$planetId} AND id_owner = {$ownerId}
+        AND galaxy = 0 AND system = " . (int) $rift['system'] . ' AND planet = ' . (int) $rift['position'] . ' AND planet_type = 1');
     }
     if ($planetId) {
-      $this->records->query("UPDATE {$this->rifts} SET planet_id = NULL WHERE rift_id = " . (int) $rift['rift_id']);
+      $this->sql->query('UPDATE ' . $this->sql->table('zero_galaxy_rifts') . ' SET planet_id = NULL
+        WHERE rift_id = ' . (int) $rift['rift_id']);
     }
   }
 
-  public function materialize(array $rift, int $ownerId, int $now, string $phase, ?array $planet): void {
-    $name = $this->records->escape(RiftName::forRift($rift, $phase));
-    if (!$planet) {
-      $system = (int) $rift['system'];
-      $position = (int) $rift['position'];
-      $collision = $this->records->query("SELECT id FROM {$this->planets} WHERE galaxy = 0
-        AND system = {$system} AND planet = {$position} LIMIT 1 FOR UPDATE")->fetch_assoc();
-      if ($collision) {
-        throw new RuntimeException('Zero Galaxy coordinates are occupied; refusing to replace another planet');
+  public function finish(int $now): void {
+    // Keep basic native income from accumulating before a dispatch refreshes a target at ETA <= now.
+    foreach (array_chunk($this->refresh, 1000) as $ids) {
+      $this->sql->query('UPDATE ' . $this->sql->table('planets') . " SET last_update = {$now}, que_processed = {$now},
+        metal_perhour = 0, crystal_perhour = 0, deuterium_perhour = 0, energy_max = 0, energy_used = 0
+        WHERE id IN (" . implode(',', $ids) . ')');
+    }
+    $this->refresh = [];
+    $this->retireUnusedOwners();
+  }
+
+  private function retireUnusedOwners(): void {
+    $planets = $this->sql->table('planets');
+    $fleets = $this->sql->table('fleets');
+    foreach (array_diff(array_keys($this->knownOwners), $this->owners) as $ownerId) {
+      if ($this->sql->query("SELECT id FROM {$planets} WHERE id_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows
+        || $this->sql->query("SELECT fleet_id FROM {$fleets} WHERE fleet_owner = {$ownerId} LIMIT 1 FOR UPDATE")->num_rows) {
+        throw new RuntimeException('Zero Galaxy retired NPC still owns planets or fleets');
       }
-      $image = $this->records->escape($rift['image']);
-      $this->records->query("INSERT INTO {$this->planets}
-        (name, id_owner, galaxy, system, planet, planet_type, image, last_update, que_processed,
-         metal, crystal, deuterium, metal_perhour, crystal_perhour, deuterium_perhour,
-         energy_max, energy_used, metal_max, crystal_max, deuterium_max,
-         field_current, position_original, field_max_original, temp_min_original, temp_max_original)
-        VALUES ('{$name}', {$ownerId}, 0, {$system}, {$position}, 1, '{$image}', {$now}, {$now},
-          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {$position}, 163, 0, 40)");
-      $planetId = $this->records->insertId();
-      $profile = Profile::read($rift);
-      if ($profile) {
-        foreach ([200 => 'fleet', 400 => 'defence'] as $type => $group) {
-          foreach ($profile[$group] as $id => $count) {
-            $this->records->query("INSERT INTO {$this->units}
-              (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
-              VALUES ({$ownerId}, 1, {$planetId}, {$type}, " . (int) $id . ", " . (int) $count . ")");
-          }
-        }
-        $m = (int) $profile['resources'][901]; $c = (int) $profile['resources'][902]; $d = (int) $profile['resources'][903];
-        $this->records->query("UPDATE {$this->planets} SET metal = {$m}, crystal = {$c}, deuterium = {$d} WHERE id = {$planetId}");
-      }
-      $this->records->query("UPDATE {$this->rifts} SET planet_id = {$planetId} WHERE rift_id = " . (int) $rift['rift_id']);
-    } else {
-      $planetId = (int) $planet['id'];
-      // Never refill an existing garrison or its loot. Keep basic native income
-      // from accumulating before a dispatch refreshes a target at ETA <= now.
-      $this->records->query("UPDATE {$this->planets} SET name = '{$name}', last_update = {$now}, que_processed = {$now},
-        metal_perhour = 0, crystal_perhour = 0,
-        deuterium_perhour = 0, energy_max = 0, energy_used = 0 WHERE id = {$planetId}");
+      $this->sql->query("UPDATE {$fleets} SET fleet_target_owner = 0 WHERE fleet_target_owner = {$ownerId}");
+      $this->sql->query('DELETE FROM ' . $this->sql->table('unit') . " WHERE unit_player_id = {$ownerId}");
+      $this->sql->query('DELETE FROM ' . $this->sql->table('users') . " WHERE id = {$ownerId}");
+      $this->sql->query('DELETE FROM ' . $this->sql->table('zero_galaxy_npcs') . " WHERE owner_id = {$ownerId}");
     }
   }
 }

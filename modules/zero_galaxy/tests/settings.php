@@ -1,22 +1,13 @@
 <?php
 
-if (PHP_SAPI !== 'cli') {
-  http_response_code(404);
-  exit;
-}
-
-require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Settings.php';
+require __DIR__ . '/support/bootstrap.php';
 
 use ZeroGalaxy\Settings;
 
-require __DIR__ . '/support/assertions.php';
-
 $defaults = Settings::load();
 $check(!array_key_exists('acs_enabled', $defaults), 'ACS must have no current configuration switch.');
-$check(Settings::load(['acs_enabled' => true]) === $defaults, 'An obsolete enabled ACS flag must not restore ACS or change the balance.');
-$changed = Settings::load(['target_active_per_system' => 0, 'active_seconds' => [3, 9], 'refresh_seconds' => 1]);
+$changed = Settings::load(['target_active_per_system' => 0, 'refresh_seconds' => 1]);
 $check($changed['target_active_per_system'] === 0.0, 'Zero must disable generation.');
-$check($changed['active_seconds'] === [3, 9], 'Overrides must replace the entire duration range.');
 $check($changed['refresh_seconds'] === 2, 'Refresh must not cause a tight reload loop.');
 
 $check(Settings::pointRange(['mean' => 1, 'spread_percent' => 100]) === [1, 2], 'A garrison must never round down to zero.');
@@ -51,8 +42,6 @@ $new['fleet_weights'] = [204 => 1.0];
 $new['tech'] = [106 => 1000];
 $catalog = Settings::load(['categories' => ['custom_1' => $new]]);
 $check($catalog['categories']['custom_1'] === $new, 'A complete new category must preserve its own balance without inherited units.');
-$legacy = Settings::load(['active_seconds' => [3, 9]]);
-$check($legacy['categories'] === $defaults['categories'], 'Deprecated seconds must not overwrite category hours.');
 $subsecond = Settings::load(['categories' => ['tiny' => ['phases_hours' => ['energy' => ['mean' => 0.000000001]]]]]);
 $check(Settings::categoryPhaseRanges($subsecond['categories']['tiny'])['energy_seconds'] === [1, 1],
   'Positive subsecond means must produce a usable one-second phase.');
@@ -60,10 +49,11 @@ $check(Settings::categoryPhaseRanges($subsecond['categories']['tiny'])['energy_s
 foreach ([
   ['target_active_per_system' => INF],
   ['tick_seconds' => 0],
-  ['active_seconds' => [10, 2]],
-  ['closed_seconds' => [1]],
   ['unknown_typo' => 1],
   ['tick_seconds' => true],
+  // Removed settings must be deleted from config.php rather than silently ignored.
+  ['acs_enabled' => false],
+  ['active_seconds' => [3, 9]],
   ['categories' => ['Bad-Key' => $new]],
   ['categories' => ['new' => array_diff_key($new, ['tech' => true])]],
   ['categories' => ['tiny' => ['typo' => 1]]],
@@ -83,13 +73,8 @@ foreach ([
   ['categories' => ['tiny' => ['phases_hours' => ['missing' => ['mean' => 1]]]]],
   ['categories' => ['tiny' => ['phases_hours' => ['energy' => ['mean' => 8760]]]]],
 ] as $invalid) {
-  $thrown = false;
-  try {
-    Settings::load($invalid);
-  } catch (InvalidArgumentException $error) {
-    $thrown = true;
-  }
-  $check($thrown, 'Invalid configuration must be rejected: ' . implode(',', array_keys($invalid)));
+  zgExpect(function () use ($invalid) { Settings::load($invalid); }, InvalidArgumentException::class,
+    'Invalid configuration must be rejected: ' . implode(',', array_keys($invalid)));
 }
 
 echo "Settings: {$assertions} assertions passed\n";

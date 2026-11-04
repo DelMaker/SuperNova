@@ -20,7 +20,7 @@ class NativeFleetForm {
     }
   }
 
-  public static function decorate($module, $template, array $settings, ?Storage $storage = null) {
+  public static function decorate($module, $template, ?Storage $storage = null) {
     if (INITIAL_PAGE !== 'fleet' || !is_object($template)) { return $template; }
     $adapter = new NativeTemplateAdapter($template);
     $step = $adapter->isNative('fleet0') ? 0 : ($adapter->isNative('fleet1') ? 1 : ($adapter->isNative('fleet2') ? 2 : -1));
@@ -34,13 +34,12 @@ class NativeFleetForm {
       }
       $fields = [];
       if ($step === 2) {
-        $system = self::integer($_POST['system'] ?? null);
-        $position = self::integer($_POST['planet'] ?? null);
-        $type = self::integer($_POST['planet_type'] ?? null);
-        $speed = self::integer($_POST['speed'] ?? null);
-        if ($system < 1 || $system > (int) SN::$config->game_maxSystem
-          || $position < 1 || $position > (int) SN::$config->game_maxPlanet
-          || !in_array($type, [PT_PLANET, PT_DEBRIS, PT_MOON], true) || $speed < 1 || $speed > 10) {
+        $system = Input::system($_POST['system'] ?? null);
+        $position = Input::position($_POST['planet'] ?? null);
+        $type = Input::int($_POST['planet_type'] ?? null);
+        $speed = Input::int($_POST['speed'] ?? null);
+        if ($system === null || $position === null || !in_array($type, [PT_PLANET, PT_DEBRIS, PT_MOON], true)
+          || $speed === null || $speed < 1 || $speed > 10) {
           throw new InvalidArgumentException('zero_galaxy_attack_bad_request');
         }
         $ships = AttackPolicy::decode($_POST['usedfleet'] ?? null);
@@ -52,7 +51,7 @@ class NativeFleetForm {
           }
           $sourceId = self::integer($_POST['source_id'] ?? null);
           $issuedAt = self::integer($_POST['token_at'] ?? null);
-          if (!AttackPolicy::validToken($_POST['token'] ?? null, $issuedAt, (int) $user['id'], $sourceId, 0, SN_TIME_NOW)) {
+          if (!AttackPolicy::validToken($_POST['token'] ?? null, $issuedAt, (int) $user['id'], $sourceId, SN_TIME_NOW)) {
             throw new InvalidArgumentException('zero_galaxy_attack_expired_form');
           }
           foreach (['resource0', 'resource1', 'resource2'] as $resource) {
@@ -60,9 +59,9 @@ class NativeFleetForm {
           }
           $request = DispatchRequest::flight($system, $position, $type, $mission, $ships, $speed,
             self::integer($_POST['captain_id'] ?? 0), $sourceId);
-          $result = (new FleetDispatchService(new NativeDispatch()))->send(new DispatchContext($user, $settings, SN_TIME_NOW), $request);
+          $result = (new NativeDispatch())->send($user, $request, SN_TIME_NOW);
           $planetrow = $result->refreshedSource;
-          $target = $result->target->planet + ['name' => ''];
+          $target = $result->target + ['name' => ''];
           $target['planet_type'] = $type;
           self::sent($result->toArray(), $target);
           return $template;
@@ -77,7 +76,7 @@ class NativeFleetForm {
         }, $missions));
         $target = DBStaticPlanet::db_planet_by_gspt(0, $system, $position, $type === PT_MOON ? PT_MOON : PT_PLANET)
           ?: ['galaxy' => 0, 'system' => $system, 'planet' => $position, 'name' => ''];
-        $travel = flt_travel_data($user, $planetrow, $target, $ships, $speed, [], \Universe::getBaseGalaxyDistance());
+        $travel = flt_travel_data($user, RiftGeometry::source($planetrow), $target, $ships, $speed);
         $template->assign_vars(['consumption' => $travel['consumption'], 'fleet_capacity' => $travel['hold'],
           'planet_deuterium' => max(0, $planetrow['deuterium'] - $travel['consumption']),
           'MISSION_NAME' => SN::$lang['type_mission'][$mission], 'target_mission' => $mission, 'IS_TRANSPORT_MISSIONS' => false]);
@@ -88,7 +87,7 @@ class NativeFleetForm {
         });
         $sourceId = (int) $planetrow['id'];
         $fields += ['source_id' => $sourceId, 'token_at' => SN_TIME_NOW,
-          'token' => AttackPolicy::token((int) $user['id'], $sourceId, 0, SN_TIME_NOW)];
+          'token' => AttackPolicy::token((int) $user['id'], $sourceId, SN_TIME_NOW)];
       }
       $payload = self::payload($adapter, $storage, $step, $fields);
       $template->assign_vars(['ZERO_ATTACK_STEP' => $step,
@@ -114,13 +113,12 @@ class NativeFleetForm {
   private static function payload(NativeTemplateAdapter $adapter, ?Storage $storage, int $step, array $fields): array {
     $lang = SN::$lang;
     $mission = (int) $adapter->value('target_mission');
-    $payload = ['step' => $step, 'mission' => $mission,
-      'distance' => \Universe::getBaseGalaxyDistance(), 'fields' => $fields];
+    $payload = ['step' => $step, 'mission' => $mission, 'distance' => RiftGeometry::distance(), 'fields' => $fields];
     if (!$storage || (int) $adapter->value('galaxy') !== 0
       || (int) $adapter->value('planet_type') !== PT_PLANET) { return $payload; }
     $rift = $storage->findActive((int) $adapter->value('system'), (int) $adapter->value('planet'), SN_TIME_NOW);
-    if (!$rift || ($limit = AttackPolicy::limit($rift)) === null) { return $payload; }
-    if ($step < 2 && $mission !== MT_ATTACK) { return $payload; }
+    $profile = $rift ? Profile::read($rift) : null;
+    if (!$profile || ($step < 2 && $mission !== MT_ATTACK)) { return $payload; }
     $prices = []; $scale = 1;
     foreach (sn_get_groups('fleet') as $id) {
       $price = (float) (eco_get_total_cost($id, 1)['total'] ?? 0);
@@ -129,10 +127,9 @@ class NativeFleetForm {
       $prices[$id] = $price;
     }
     foreach ($prices as $id => $price) { $prices[$id] = sprintf('%.0F', round($price * $scale)); }
-    $profile = Profile::read($rift);
     return $payload + ['target' => ['system' => (int) $rift['system'], 'position' => (int) $rift['position'],
-      'name' => RiftName::forRift($rift, Lifecycle::phase($rift, SN_TIME_NOW), $lang['zero_galaxy_time']['locale'] ?? 'ru'),
-      'color' => $profile['category']['color'], 'limit' => (string) $limit . ($scale === 1 ? '' : '000000')],
+      'name' => RiftName::forRift($rift, Lifecycle::phase($rift, SN_TIME_NOW), $lang),
+      'color' => $profile['category']['color'], 'limit' => $profile['fleet_limit'] . ($scale === 1 ? '' : '000000')],
       'unitCosts' => $prices, 'costScale' => (string) $scale,
       'fixedFleet' => $step ? array_map('strval', AttackPolicy::decode($adapter->value('usedfleet'))) : [],
       'labels' => ['limit' => $lang['zero_galaxy_fleet_limit'],
@@ -172,9 +169,10 @@ class NativeFleetForm {
   }
 
   private static function integer($value): int {
-    if (!is_scalar($value) || is_bool($value) || filter_var($value, FILTER_VALIDATE_INT) === false) {
+    $integer = Input::int($value);
+    if ($integer === null) {
       throw new InvalidArgumentException('zero_galaxy_attack_bad_request');
     }
-    return (int) $value;
+    return $integer;
   }
 }

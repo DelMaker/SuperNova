@@ -1,68 +1,30 @@
 <?php
 
-if (PHP_SAPI !== 'cli' || getenv('SUPERNOVA_DB_HOST') !== 'db'
-  || getenv('SUPERNOVA_DB_NAME') !== 'supernova' || !is_file('/var/lib/supernova/cookie-secret')) {
-  exit("Recycler sender tests require the local SuperNova Docker environment.\n");
-}
-chdir(dirname(__DIR__, 3));
-$_SERVER = array_replace($_SERVER, [
-  'SCRIPT_NAME' => '/zero-recycle-send-test.php', 'SCRIPT_FILENAME' => getcwd() . '/zero-recycle-send-test.php',
-  'HTTP_HOST' => 'localhost:8080', 'SERVER_NAME' => 'localhost', 'REMOTE_ADDR' => '127.0.0.1',
-  'REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/zero-recycle-send-test.php',
-]);
-$_GET = $_POST = $_COOKIE = $_REQUEST = [];
-define('IN_AJAX', true);
-$allow_anonymous = true;
+require __DIR__ . '/support/bootstrap.php';
+require __DIR__ . '/support/database.php';
+zgGameRequest('zero-galaxy-recycle-send-test');
 require getcwd() . '/common.php';
-require_once __DIR__ . '/support/autoload.php';
 require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
-foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'NativeDispatch', 'RecycleSender'] as $class) {
-  require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';
-}
 
 use DBAL\db_mysql;
 use Planet\DBStaticPlanet;
 use Unit\DBStaticUnit;
-use ZeroGalaxy\RecycleSender;
+use ZeroGalaxy\AjaxFleetSender;
+use ZeroGalaxy\RiftGeometry;
 use ZeroGalaxy\Settings;
 use ZeroGalaxy\Storage;
 
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-$db = SN::$db->link;
-$original = [SN::$db, SN::$db->db_prefix, SN::$sys_user_logged_in, $user, $planetrow];
-$prefix = 'zg_rcsend_' . bin2hex(random_bytes(5)) . '_';
-$tables = ['zero_galaxy_npcs', 'zero_galaxy_rifts', 'zero_galaxy_state', 'fleets', 'unit', 'planets', 'users'];
-require __DIR__ . '/support/assertions.php';
-$one = function (string $sql) use ($db): ?array { return $db->query($sql)->fetch_assoc(); };
-$scalar = function (string $sql) use ($db) { return $db->query($sql)->fetch_row()[0]; };
-$rows = function (string $sql) use ($db): array { return $db->query($sql)->fetch_all(MYSQLI_ASSOC); };
-
-class RecyclerRefreshFailure {
-  private $db;
-  private $source;
-  public $failures = 0;
-  public function __construct($db, int $source) { $this->db = $db; $this->source = $source; }
-  public function __get($name) { return $this->db->$name; }
-  public function __call($name, $arguments) { return $this->db->$name(...$arguments); }
-  public function doquery($sql, $fetch = false, $skip = false) {
-    if (!$this->failures && !db_mysql::$db_in_transaction
-      && strpos($sql, 'SELECT * FROM {{planets}}') === 0 && strpos($sql, '`id` = ' . $this->source) !== false) {
-      $this->failures++;
-      throw new RuntimeException('Injected recycler committed source refresh failure');
-    }
-    return $this->db->doquery($sql, $fetch, $skip);
-  }
-}
+$tables = new ZgTables(SN::$db->link, 'recycle_send');
+$db = $tables->db;
+$prefix = $tables->prefix;
+$original = [SN::$db, SN::$sys_user_logged_in, $user, $planetrow];
 
 try {
-  foreach (['users', 'planets', 'unit', 'fleets'] as $table) {
-    $db->query("CREATE TABLE {$prefix}{$table} LIKE {$original[1]}{$table}");
-  }
-  SN::$db->db_prefix = $prefix;
-  SN::$db->schema()->clear();
-  DBStaticUnit::cache_clear();
+  $tables->cloneGame(['users', 'planets', 'unit', 'fleets', 'que'], SN::$db->db_prefix);
+  $tables->useInGame();
   $settings = Settings::load(['target_active_per_system' => 0]);
-  $storage = new Storage($db, $prefix);
+  $storage = new Storage($tables->sql());
   $storage->tick(SN_TIME_NOW, $settings, 1, 1, true);
   $db->query("INSERT INTO {$prefix}users (username,password,galaxy,total_points,user_lastip,onlinetime)
     VALUES ('Isolated recycler pilot','!disabled!',5,1000000,'127.0.0.2'," . SN_TIME_NOW . ")");
@@ -79,19 +41,16 @@ try {
     $db->query("INSERT INTO {$prefix}unit (unit_player_id,unit_location_type,unit_location_id,unit_type,unit_snid,unit_level)
       VALUES ({$pilot},1,{$sourceId},200,{$id},{$count})");
   }
-  $born = SN_TIME_NOW - 10; $opens = SN_TIME_NOW - 9;
-  $unstable = SN_TIME_NOW + 10000; $closes = SN_TIME_NOW + 20000; $disappears = SN_TIME_NOW + 30000;
-  $snapshot = $db->real_escape_string(json_encode(['profile' => ['version' => 1,
-    'category' => ['key' => 'tiny', 'name' => 'Крошечный', 'color' => '#ADFF2F'],
-    'fleet' => [], 'defence' => [], 'resources' => [901 => 0, 902 => 0, 903 => 0]]]));
+  $ownerId = (int) $tables->scalar("SELECT owner_id FROM {$prefix}zero_galaxy_npcs WHERE category_key = 'tiny'");
+  $unstable = SN_TIME_NOW + 10000; $closes = SN_TIME_NOW + 20000;
+  $snapshot = $db->real_escape_string(zgSnapshot());
   $db->query("INSERT INTO {$prefix}zero_galaxy_rifts
-    (system,position,born_at,opens_at,unstable_at,closes_at,disappears_at,image,config_snapshot)
-    VALUES (1,1,{$born},{$opens},{$unstable},{$closes},{$disappears},'normaltempplanet01','{$snapshot}')");
+    (system,position,born_at,opens_at,unstable_at,closes_at,disappears_at,image,config_snapshot,npc_owner_id)
+    VALUES (1,1," . (SN_TIME_NOW - 10) . ',' . (SN_TIME_NOW - 9) . ",{$unstable},{$closes}," . (SN_TIME_NOW + 30000)
+    . ",'normaltempplanet01','{$snapshot}',{$ownerId})");
   $riftId = (int) $db->insert_id;
   $storage->tick(SN_TIME_NOW, $settings, 1, 1, true);
-  $rift = $one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}");
-  $targetId = (int) $rift['planet_id'];
-  $ownerId = (int) $rift['npc_owner_id'];
+  $targetId = (int) $tables->scalar("SELECT planet_id FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}");
   $db->query("UPDATE {$prefix}planets SET debris_metal=30000,debris_crystal=10000 WHERE id={$targetId}");
 
   $refresh = function () use ($pilot, $sourceId) {
@@ -101,91 +60,79 @@ try {
     $planetrow = DBStaticPlanet::db_planet_by_id($sourceId, true);
     SN::$sys_user_logged_in = true;
   };
-  $state = function () use ($rows, $prefix): array {
-    $result = [];
-    foreach (['users','planets','unit','fleets','zero_galaxy_rifts'] as $table) {
-      $result[$table] = $rows("SELECT * FROM {$prefix}{$table}");
-    }
-    return $result;
+  $state = function () use ($tables, $prefix): array {
+    return array_map(function ($table) use ($tables, $prefix) {
+      return $tables->rows("SELECT * FROM {$prefix}{$table}");
+    }, ['users', 'planets', 'unit', 'fleets', 'zero_galaxy_rifts']);
   };
-  $post = function (array $overrides = []) use ($riftId) {
+  $post = function (array $overrides = []) {
     $_SERVER['REQUEST_METHOD'] = 'POST';
     $_SERVER['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest';
     $_POST = array_replace(['galaxy' => '0', 'system' => '1', 'planet' => '1',
-      'planet_type' => (string) PT_DEBRIS, 'mission' => (string) MT_RECYCLE, 'rift_id' => (string) $riftId], $overrides);
+      'planet_type' => (string) PT_DEBRIS, 'mission' => (string) MT_RECYCLE], $overrides);
   };
-  $send = function () use ($storage, $settings) { return RecycleSender::send($storage, $settings); };
   $resetLaunch = function () use ($db, $prefix, $sourceId, $refresh) {
     $db->query("DELETE FROM {$prefix}fleets");
     $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
     $db->query("UPDATE {$prefix}planets SET deuterium=1000000000 WHERE id={$sourceId}");
     $refresh();
   };
-  $rejected = function (string $message, string $expected = null) use ($send, $state, $check, $scalar) {
+  $rejected = function (string $message, string $expected = null) use ($state, $check, $tables) {
     $before = $state();
-    $response = $send();
+    $response = AjaxFleetSender::send();
     $check(strpos($response, '|flt_recyclers=') === false && ($expected === null || $response === $expected), $message . ': correct rejection');
     $check($state() === $before, $message . ': ships, fuel, target and flights untouched');
-    $check(!db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0, $message . ': no leaked transaction');
+    $check(!db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 0, $message . ': no leaked transaction');
   };
 
   foreach ([['galaxy' => '1'],['system' => '0'],['planet' => '0'],['planet_type' => PT_PLANET],
     ['mission' => MT_ATTACK],['system' => '1.5']] as $invalid) {
-    $refresh(); $post($invalid); $rejected('Malformed quick-recycle request');
+    $refresh(); $post($invalid);
+    $rejected('Malformed quick-recycle request', isset($invalid['mission']) ? null : $lang['zero_galaxy_recycle_bad_request']);
   }
   $post(); $_SERVER['REQUEST_METHOD']='GET'; $rejected('Non-POST request');
   $post(); unset($_SERVER['HTTP_X_REQUESTED_WITH']); $rejected('Non-AJAX request');
   $post(); SN::$sys_user_logged_in=false; $rejected('Unauthenticated caller');
-  $resetLaunch(); $post(['rift_id' => (string) ($riftId + 1000)]);
-  $check(strpos($send(), '|flt_recyclers=') !== false, 'Quick recycling must ignore stale generation IDs');
   $resetLaunch(); $post();
   $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at=" . (SN_TIME_NOW-1)
     . ',closes_at=' . SN_TIME_NOW . " WHERE rift_id={$riftId}");
-  $check(strpos($send(), '|flt_recyclers=') !== false, 'A phase deadline must not gate launch toward an existing debris field');
+  $check(strpos(AjaxFleetSender::send(), '|flt_recyclers=') !== false, 'A phase deadline must not gate launch toward an existing debris field');
   $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at={$unstable},closes_at={$closes} WHERE rift_id={$riftId}");
   $resetLaunch();
   $db->query("UPDATE {$prefix}planets SET debris_metal=0,debris_crystal=0 WHERE id={$targetId}");
   $refresh(); $post(); $rejected('Empty debris field', $lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
-  $post(['ships' => [SHIP_RECYCLER => '3']]);
-  $rejected('Explicit recyclers require an existing debris field', $lang['fl_attack_error'][ATTACK_NO_DEBRIS]);
-  $resetLaunch(); $post(['system' => '2', 'planet' => '2', 'ships' => [SHIP_RECYCLER => '4']]);
-  $rejected('Explicit recyclers require an existing target planet', $lang['fl_attack_error'][ATTACK_NO_TARGET]);
+  $resetLaunch(); $post(['system' => '2', 'planet' => '2']);
+  $rejected('Quick recycling requires an existing target planet', $lang['zero_galaxy_recycle_missing']);
   $db->query("UPDATE {$prefix}planets SET debris_metal=30000,debris_crystal=10000 WHERE id={$targetId}");
-  $refresh(); $post(['ships' => [SHIP_RECYCLER => '3']]);
-  $check(strpos($send(), '|flt_recyclers=47') !== false, 'Explicit recyclers can depart for an existing debris field');
-  $fleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
-  $check(sys_unit_str2arr($fleet['fleet_array']) === [SHIP_RECYCLER => 3]
-    && (int) $fleet['fleet_end_planet_id'] === $targetId && (int) $fleet['fleet_end_type'] === PT_DEBRIS,
-    'A valid explicit recycling flight preserves its composition and debris destination type');
   $resetLaunch();
   $db->query("UPDATE {$prefix}unit SET unit_level=0 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $refresh(); $post(); $rejected('No available recyclers', $lang['fl_attack_error'][ATTACK_NO_RECYCLERS]);
   $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $refresh(); $post(); db_mysql::db_transaction_start();
-  $response = $send();
+  $response = AjaxFleetSender::send();
   $check(strpos($response, '|') === false && db_mysql::$db_in_transaction
-    && (int) $scalar('SELECT @@in_transaction') === 1, 'Reject nested transaction without taking ownership');
+    && (int) $tables->scalar('SELECT @@in_transaction') === 1, 'Reject nested transaction without taking ownership');
   db_mysql::db_transaction_rollback();
 
   $refresh(); $post();
   $db->query("CREATE TRIGGER {$prefix}reject_unit BEFORE UPDATE ON {$prefix}unit FOR EACH ROW
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Recycler sender rollback test'");
   ob_start();
-  try { $rejected('Native unit debit failure after fleet insert and fuel debit'); }
+  try { $rejected('Native unit debit failure after fleet insert and fuel debit', $lang['zero_galaxy_recycle_failed']); }
   finally { restore_error_handler(); ob_end_clean(); $db->query("DROP TRIGGER {$prefix}reject_unit"); }
 
   $refresh(); $post();
-  $sourceBefore = $one("SELECT * FROM {$prefix}planets WHERE id={$sourceId}");
-  $targetBefore = $one("SELECT * FROM {$prefix}planets WHERE id={$targetId}");
-  $riftBefore = $one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}");
-  $from = $planetrow; $from['galaxy']=1;
+  $sourceBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id={$sourceId}");
+  $targetBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id={$targetId}");
+  $riftBefore = $tables->one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}");
+  $from = RiftGeometry::source($planetrow);
   $selection = flt_calculate_fleet_to_transport([SHIP_RECYCLER => 50], 40000, $from, $targetBefore);
   $expectedFleet = array_map('intval',$selection['fleet']);
   $travel = flt_travel_data($user,$planetrow,$targetBefore,$expectedFleet,10,[],Universe::getBaseGalaxyDistance());
-  $response = $send();
+  $response = AjaxFleetSender::send();
   $sent = (int) $expectedFleet[SHIP_RECYCLER];
   $check(strpos($response, '|flt_recyclers=' . (50-$sent)) !== false, 'Send native minimum fleet and return precise remaining recycler count');
-  $fleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $fleet = $tables->one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
   $check(sys_unit_str2arr($fleet['fleet_array']) === $expectedFleet && (int) $fleet['fleet_mission'] === MT_RECYCLE
     && (int) $fleet['fleet_end_type'] === PT_DEBRIS, 'Persist ordinary native recycle mission to debris, no fighters or captain');
   $check((int) $fleet['fleet_end_planet_id'] === $targetId && (int) $fleet['fleet_target_owner'] === $ownerId,
@@ -194,20 +141,20 @@ try {
     && (int) $fleet['fleet_start_planet'] === 8, 'Temporary distance normalization must not alter actual origin');
   $check((int) $fleet['fleet_start_time'] === SN_TIME_NOW + (int) $travel['duration']
     && (int) $fleet['fleet_end_time'] === SN_TIME_NOW + 2*(int) $travel['duration'], 'Both native times use exactly one intergalactic distance');
-  $check((int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER) === 50-$sent,
+  $check((int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER) === 50-$sent,
     'Exactly selected recyclers leave source');
-  $check((int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_SMALL_FIGHTER_LIGHT) === 17,
+  $check((int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_SMALL_FIGHTER_LIGHT) === 17,
     'Quick recycling never takes combat ships');
-  $check((float) $sourceBefore['deuterium'] - (float) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}") === (float) $travel['consumption'],
+  $check((float) $sourceBefore['deuterium'] - (float) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}") === (float) $travel['consumption'],
     'Exact native one-distance fuel is debited once');
-  $check($targetBefore === $one("SELECT * FROM {$prefix}planets WHERE id={$targetId}") && $riftBefore === $one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}"),
+  $check($targetBefore === $tables->one("SELECT * FROM {$prefix}planets WHERE id={$targetId}")
+    && $riftBefore === $tables->one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id={$riftId}"),
     'Sending does not collect debris, reserve it, change phase or extend deadlines');
 
   $db->query("DELETE FROM {$prefix}fleets");
   $db->query("UPDATE {$prefix}unit SET unit_level=1 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $refresh(); $post();
-  $response = $send();
-  $check(strpos($response,'|flt_recyclers=0') !== false, 'Insufficient recycler inventory sends an available partial collection fleet');
+  $check(strpos(AjaxFleetSender::send(),'|flt_recyclers=0') !== false, 'Insufficient recycler inventory sends an available partial collection fleet');
   $db->query("DELETE FROM {$prefix}fleets");
   $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $refresh(); $post();
@@ -216,28 +163,23 @@ try {
   $db->query("UPDATE {$prefix}planets SET deuterium={$fuel} WHERE id={$sourceId}");
   $db->query("UPDATE {$prefix}planets SET debris_metal=1000000000000000,debris_crystal=2000000000000000 WHERE id={$targetId}");
   $refresh(); $post();
-  $response = $send();
-  $check(strpos($response,'|flt_recyclers=48') !== false, 'Native selection reduces fleet to available fuel even for enormous debris fields');
-  $check((float)$scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}") >= 0, 'Partial launch cannot overdraw fuel');
+  $check(strpos(AjaxFleetSender::send(),'|flt_recyclers=48') !== false, 'Native selection reduces fleet to available fuel even for enormous debris fields');
+  $check((float)$tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}") >= 0, 'Partial launch cannot overdraw fuel');
 
   $db->query("DELETE FROM {$prefix}fleets");
   $db->query("UPDATE {$prefix}unit SET unit_level=50 WHERE unit_location_id={$sourceId} AND unit_snid=" . SHIP_RECYCLER);
   $db->query("UPDATE {$prefix}planets SET deuterium=1000000000 WHERE id={$sourceId}");
   $refresh(); $post();
-  $nativeDb = SN::$db;
-  $fault = new RecyclerRefreshFailure($nativeDb,$sourceId);
+  $fault = new ZgRefreshFailure($original[0], $sourceId);
   SN::$db = $fault;
-  try { $response=$send(); } finally { SN::$db=$nativeDb; }
+  try { $response = AjaxFleetSender::send(); } finally { SN::$db = $original[0]; }
   $check($fault->failures===1 && strpos($response,'|flt_recyclers=0')!==false
-    && (int)$scalar("SELECT COUNT(*) FROM {$prefix}fleets")===1, 'Committed launch survives a failed display refresh without reporting a failed send');
-  $check(!db_mysql::$db_in_transaction && (int)$scalar('SELECT @@in_transaction')===0, 'Successful sends leave no open transaction');
+    && (int)$tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets")===1, 'Committed launch survives a failed display refresh without reporting a failed send');
+  $check(!db_mysql::$db_in_transaction && (int)$tables->scalar('SELECT @@in_transaction')===0, 'Successful sends leave no open transaction');
+  echo "Zero Galaxy recycler sender: {$assertions} assertions passed; native dispatch helpers and isolated SQL tables.\n";
 } finally {
-  if (db_mysql::$db_in_transaction) { db_mysql::db_transaction_rollback(); }
-  SN::$db=$original[0];
-  SN::$db->db_prefix=$original[1];
-  SN::$db->schema()->clear();
-  DBStaticUnit::cache_clear();
-  SN::$sys_user_logged_in=$original[2]; $user=$original[3]; $planetrow=$original[4];
-  foreach ($tables as $table) { $db->query("DROP TABLE IF EXISTS {$prefix}{$table}"); }
+  SN::$db = $original[0];
+  $tables->restoreGame();
+  [, SN::$sys_user_logged_in, $user, $planetrow] = $original;
+  $tables->drop();
 }
-echo "Zero Galaxy recycler sender: {$assertions} assertions passed; native dispatch helpers and isolated SQL tables.\n";

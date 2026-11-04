@@ -1,95 +1,41 @@
 <?php
 
-if (PHP_SAPI !== 'cli' || getenv('SUPERNOVA_DB_HOST') !== 'db'
-  || getenv('SUPERNOVA_DB_NAME') !== 'supernova' || !is_file('/var/lib/supernova/cookie-secret')) {
-  exit("Attack sender tests require the local SuperNova Docker environment.\n");
-}
-
-chdir(dirname(__DIR__, 3));
-$_SERVER = array_replace($_SERVER, [
-  'SCRIPT_NAME' => '/zero-galaxy-attack-send-test.php',
-  'SCRIPT_FILENAME' => getcwd() . '/zero-galaxy-attack-send-test.php',
-  'HTTP_HOST' => 'localhost:8080', 'SERVER_NAME' => 'localhost',
-  'REMOTE_ADDR' => '127.0.0.1', 'REQUEST_METHOD' => 'GET',
-  'REQUEST_URI' => '/zero-galaxy-attack-send-test.php', 'HTTP_USER_AGENT' => 'ZeroGalaxy attack sender test',
-]);
-$_GET = $_POST = $_COOKIE = $_REQUEST = [];
-define('IN_AJAX', true);
-$allow_anonymous = true;
+require __DIR__ . '/support/bootstrap.php';
+require __DIR__ . '/support/database.php';
+zgGameRequest('zero-galaxy-attack-send-test');
 require getcwd() . '/common.php';
-require_once __DIR__ . '/support/autoload.php';
-foreach (['Settings', 'Profile', 'Lifecycle', 'Storage', 'RiftTarget', 'AttackPolicy', 'NativeDispatch', 'SpySender'] as $class) {
-  require_once dirname(__DIR__) . '/classes/ZeroGalaxy/' . $class . '.php';
-}
 require_once SN_ROOT_PHYSICAL . 'includes/includes/flt_functions.php';
 
 use DBAL\db_mysql;
 use Planet\DBStaticPlanet;
 use Unit\DBStaticUnit;
+use ZeroGalaxy\AjaxFleetSender;
 use ZeroGalaxy\AttackPolicy;
+use ZeroGalaxy\DispatchFailure;
+use ZeroGalaxy\DispatchRequest;
+use ZeroGalaxy\NativeDispatch;
+use ZeroGalaxy\Npc;
 use ZeroGalaxy\Profile;
 use ZeroGalaxy\Settings;
-use ZeroGalaxy\SpySender;
 use ZeroGalaxy\Storage;
 
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-$db = SN::$db->link;
-$originalPrefix = SN::$db->db_prefix;
-$originalLoggedIn = SN::$sys_user_logged_in;
-$originalUser = $user;
-$originalPlanet = $planetrow;
-$originalUserOptions = SN::$user_options;
-$originalDb = SN::$db;
-$prefix = 'zg_send_' . bin2hex(random_bytes(5)) . '_';
-$tables = ['zero_galaxy_npcs', 'zero_galaxy_rifts', 'zero_galaxy_state', 'captain', 'bashing', 'fleets', 'unit', 'planets', 'users'];
-require __DIR__ . '/support/assertions.php';
-$one = function (string $sql) use ($db): ?array { return $db->query($sql)->fetch_assoc(); };
-$scalar = function (string $sql) use ($db) { return $db->query($sql)->fetch_row()[0]; };
-$rows = function (string $sql) use ($db): array { return $db->query($sql)->fetch_all(MYSQLI_ASSOC); };
+$tables = new ZgTables(SN::$db->link, 'attack_send');
+$db = $tables->db;
+$prefix = $tables->prefix;
+$original = [SN::$db, SN::$sys_user_logged_in, $user, $planetrow, SN::$user_options];
 $expect = function (callable $callable, string $class, string $message, string $exactMessage = null) use ($check) {
-  try { $callable(); }
-  catch (Throwable $error) {
-    if (!$error instanceof $class) { throw $error; }
-    $actual = $error instanceof \ZeroGalaxy\DispatchFailure ? $error->translate($GLOBALS['lang']) : $error->getMessage();
-    $check($exactMessage === null || $actual === $exactMessage, $message . ': wrong error message');
-    return;
-  }
-  $check(false, $message);
+  $error = zgExpect($callable, $class, $message);
+  $actual = $error instanceof DispatchFailure ? $error->translate($GLOBALS['lang']) : ($error ? $error->getMessage() : null);
+  $check($exactMessage === null || $actual === $exactMessage, $message . ': wrong error message');
 };
 
-// Fail only the display refresh after native COMMIT; all transactional writes
-// still go through the real DBAL and connection, with no production test hook.
-class DispatchRefreshFailure {
-  private $db;
-  private $sourceId;
-  public $failures = 0;
-
-  public function __construct($db, int $sourceId) { $this->db = $db; $this->sourceId = $sourceId; }
-  public function __get($name) { return $this->db->$name; }
-  public function __call($name, $arguments) { return $this->db->$name(...$arguments); }
-  public function doquery($query, $fetch = false, $skip = false) {
-    if (!$this->failures && !db_mysql::$db_in_transaction
-      && strpos($query, 'SELECT * FROM {{planets}}') === 0
-      && strpos($query, '`id` = ' . $this->sourceId) !== false) {
-      $this->failures++;
-      throw new RuntimeException('Injected committed source refresh failure');
-    }
-    return $this->db->doquery($query, $fetch, $skip);
-  }
-}
-
 try {
-  if (!preg_match('/^[a-zA-Z0-9_]*$/D', $originalPrefix)) { throw new RuntimeException('Invalid source prefix'); }
-  foreach (['users', 'planets', 'unit', 'fleets', 'bashing', 'captain'] as $table) {
-    $db->query("CREATE TABLE {$prefix}{$table} LIKE {$originalPrefix}{$table}");
-  }
-  // Every native {{table}} query now targets fresh isolated tables. Unit and
-  // schema caches are cleared before use and restored after the test.
-  SN::$db->db_prefix = $prefix;
-  SN::$db->schema()->clear();
-  DBStaticUnit::cache_clear();
+  $tables->cloneGame(['users', 'planets', 'unit', 'fleets', 'bashing', 'captain', 'que', 'quest', 'quest_status'], SN::$db->db_prefix);
+  // Every native {{table}} query now targets the isolated tables.
+  $tables->useInGame();
   $settings = Settings::load(['target_active_per_system' => 0]);
-  $storage = new Storage($db, $prefix);
+  $storage = new Storage($tables->sql());
   $storage->tick(SN_TIME_NOW, $settings, 1, 1, true);
 
   $db->query("INSERT INTO {$prefix}users (username, password, galaxy, total_points, user_lastip, onlinetime)
@@ -99,13 +45,12 @@ try {
     VALUES ('Untouched isolated pilot', '!disabled-other!', 2, '127.0.0.3')");
   $otherId = (int) $db->insert_id;
   foreach ([[$actorId, 'Signed source', 3, 1000000000], [$actorId, 'Other selected source', 4, 1000000000],
-    [$otherId, 'Foreign source', 2, 12345]] as $planetSpec) {
-    list($owner, $name, $galaxy, $fuel) = $planetSpec;
+    [$otherId, 'Foreign source', 2, 12345]] as [$owner, $name, $galaxy, $fuel]) {
     $db->query("INSERT INTO {$prefix}planets (name, id_owner, galaxy, system, planet, planet_type, deuterium)
       VALUES ('{$name}', {$owner}, {$galaxy}, 1, 8, 1, {$fuel})");
     $sources[] = (int) $db->insert_id;
   }
-  list($sourceId, $alternateId, $foreignId) = $sources;
+  [$sourceId, $alternateId, $foreignId] = $sources;
   $db->query("UPDATE {$prefix}users SET id_planet = {$sourceId}, current_planet = {$sourceId} WHERE id = {$actorId}");
   foreach ([TECH_COMPUTER => 20, TECH_ENGINE_CHEMICAL => 8] as $id => $level) {
     $db->query("INSERT INTO {$prefix}unit (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
@@ -115,27 +60,23 @@ try {
     $db->query("INSERT INTO {$prefix}unit (unit_player_id, unit_location_type, unit_location_id, unit_type, unit_snid, unit_level)
       VALUES ({$actorId}, 1, {$sourceId}, 200, {$id}, 50)");
   }
-  $shipUnit = (int) $scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_location_type = 1
+  $shipUnit = (int) $tables->scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_location_type = 1
     AND unit_location_id = {$sourceId} AND unit_snid = " . SHIP_SMALL_FIGHTER_LIGHT);
-  $rates = [901 => (float) SN::$config->rpg_exchange_metal,
-    902 => SN::$config->rpg_exchange_crystal / SN::$config->rpg_exchange_metal,
-    903 => SN::$config->rpg_exchange_deuterium / SN::$config->rpg_exchange_metal];
-  $profile = Profile::create('tiny', $settings['categories']['tiny'], 1.25, $rates);
+  $profile = Profile::create('tiny', $settings['categories']['tiny'], 1.25, Profile::nativeRates());
   // An exact native ten-fighter cap isolates the > versus >= admission boundary.
   $profile['fleet_limit'] = AttackPolicy::cost([SHIP_SMALL_FIGHTER_LIGHT => 10]);
   $snapshot = $db->real_escape_string(json_encode(['profile' => $profile], JSON_THROW_ON_ERROR));
+  $npcId = (int) $tables->scalar("SELECT owner_id FROM {$prefix}zero_galaxy_npcs WHERE category_key = 'tiny'");
   $born = SN_TIME_NOW - 10; $opens = SN_TIME_NOW - 9;
   $unstable = SN_TIME_NOW + 10000; $closes = SN_TIME_NOW + 20000; $disappears = SN_TIME_NOW + 30000;
   $db->query("INSERT INTO {$prefix}zero_galaxy_rifts
-    (system, position, born_at, opens_at, unstable_at, closes_at, disappears_at, image, config_snapshot)
-    VALUES (1, 1, {$born}, {$opens}, {$unstable}, {$closes}, {$disappears}, 'normaltempplanet01', '{$snapshot}')");
+    (system, position, born_at, opens_at, unstable_at, closes_at, disappears_at, image, config_snapshot, npc_owner_id)
+    VALUES (1, 1, {$born}, {$opens}, {$unstable}, {$closes}, {$disappears}, 'normaltempplanet01', '{$snapshot}', {$npcId})");
   $riftId = (int) $db->insert_id;
   $storage->tick(SN_TIME_NOW, $settings, 1, 1, true);
-  $rift = $one("SELECT * FROM {$prefix}zero_galaxy_rifts WHERE rift_id = {$riftId}");
-  $targetId = (int) $rift['planet_id'];
-  $npcId = (int) $rift['npc_owner_id'];
-  $foreignBefore = $one("SELECT * FROM {$prefix}users WHERE id = {$otherId}");
-  $foreignPlanetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$foreignId}");
+  $targetId = (int) $tables->scalar("SELECT planet_id FROM {$prefix}zero_galaxy_rifts WHERE rift_id = {$riftId}");
+  $foreignBefore = $tables->one("SELECT * FROM {$prefix}users WHERE id = {$otherId}");
+  $foreignPlanetBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$foreignId}");
 
   $refresh = function () use ($actorId, $sourceId) {
     global $user, $planetrow;
@@ -144,34 +85,32 @@ try {
     $planetrow = DBStaticPlanet::db_planet_by_id($sourceId, true);
     SN::$sys_user_logged_in = true;
   };
-  $state = function () use ($rows, $prefix): array {
-    return [$rows("SELECT * FROM {$prefix}users ORDER BY id"), $rows("SELECT * FROM {$prefix}planets ORDER BY id"),
-      $rows("SELECT * FROM {$prefix}unit ORDER BY unit_id"), $rows("SELECT * FROM {$prefix}fleets ORDER BY fleet_id"),
-      $rows("SELECT * FROM {$prefix}captain ORDER BY captain_id")];
+  $state = function () use ($tables, $prefix): array {
+    return array_map(function ($table) use ($tables, $prefix) {
+      return $tables->rows("SELECT * FROM {$prefix}{$table}");
+    }, ['users', 'planets', 'unit', 'fleets', 'captain']);
   };
   $rejected = function (callable $callable, string $message, string $exact = null, string $class = InvalidArgumentException::class)
-    use ($state, $expect, $check, $refresh, $scalar) {
+    use ($state, $expect, $check, $refresh, $tables) {
     $refresh(); $before = $state();
     $expect($callable, $class, $message, $exact);
     $check($state() === $before, $message . ': rejected send must not change ships, fuel, captains, users or fleets');
-    $check(!db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0, $message . ': own transaction must be closed');
+    $check(!db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 0, $message . ': own transaction must be closed');
   };
-  $dispatch = function (array $settings, array $rift, array $ships, int $speed,
-    int $captain = 0, int $source = 0): array {
+  $flight = function (int $mission, array $ships, int $position = 1, int $type = PT_PLANET, int $speed = 10,
+    int $captain = 0, int $source = 0): \ZeroGalaxy\DispatchResult {
     global $user, $planetrow;
-    $request = \ZeroGalaxy\DispatchRequest::flight((int) $rift['system'], (int) $rift['position'], PT_PLANET,
-      MT_ATTACK, $ships, $speed, $captain, $source);
-    $result = (new \ZeroGalaxy\FleetDispatchService(new \ZeroGalaxy\NativeDispatch()))->send(
-      new \ZeroGalaxy\DispatchContext($user, $settings, SN_TIME_NOW), $request);
+    $result = (new NativeDispatch())->send($user,
+      DispatchRequest::flight(1, $position, $type, $mission, $ships, $speed, $captain, $source), SN_TIME_NOW);
     $planetrow = $result->refreshedSource;
-    return $result->toArray();
+    return $result;
   };
-  $send = function (array $ships, int $speed = 10, int $captain = 0, int $source = 0)
-    use ($dispatch, $settings, $rift) {
-    return $dispatch($settings, $rift, $ships, $speed, $captain, $source);
+  $send = function (array $ships, int $speed = 10, int $captain = 0, int $source = 0) use ($flight): array {
+    return $flight(MT_ATTACK, $ships, 1, PT_PLANET, $speed, $captain, $source)->toArray();
   };
 
-  $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 11]); }, 'Strictly over-limit fleet', AttackPolicy::OVER_LIMIT);
+  $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 11]); }, 'Strictly over-limit fleet',
+    $lang['zero_galaxy_attack_over_limit']);
   $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1.5]); }, 'Fractional ships');
   $rejected(function () use ($send, $foreignId) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $foreignId); }, 'Another player source planet');
   $db->query("UPDATE {$prefix}planets SET id_owner = {$otherId} WHERE id = {$targetId}");
@@ -189,7 +128,7 @@ try {
   $refresh();
   db_mysql::db_transaction_start();
   $expect(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1]); }, RuntimeException::class, 'Foreign transaction context');
-  $check(db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 1,
+  $check(db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 1,
     'Rejecting a nested send must retain caller transaction control.');
   db_mysql::db_transaction_rollback();
 
@@ -209,25 +148,25 @@ try {
   }
   $db->query("DROP TRIGGER {$prefix}reject_unit");
 
-  // Exercise the AJAX sender itself, not only its arrival/report adapter.
+  // Quick reconnaissance from the universe view, as posted by the native doit() to flotenajax.php.
   $_SERVER['REQUEST_METHOD'] = 'POST';
   $_SERVER['HTTP_X_REQUESTED_WITH'] = 'XMLHttpRequest';
-  $npcPoints = (int) $scalar("SELECT total_points FROM {$prefix}users WHERE id = {$npcId}");
+  $npcPoints = (int) $tables->scalar("SELECT total_points FROM {$prefix}users WHERE id = {$npcId}");
   $db->query("UPDATE {$prefix}users SET total_points = 1000000 WHERE id = {$npcId}");
-  $spySend = function (array $fields = [], bool $useDefault = false) use ($storage, $settings, $riftId) {
+  $spySend = function (array $fields = [], bool $useDefault = false) {
     $_POST = array_replace(['galaxy' => '0', 'system' => '1', 'planet' => '1', 'planet_type' => '1',
-      'mission' => (string) MT_SPY, 'rift_id' => (string) $riftId, 'shipcount' => '3'], $fields);
+      'mission' => (string) MT_SPY, 'shipcount' => '3'], $fields);
     if ($useDefault) { unset($_POST['shipcount']); }
-    return SpySender::send($storage, $settings);
+    return AjaxFleetSender::send();
   };
   $spyRejected = function (array $fields, string $message, string $expected = null)
-    use ($spySend, $refresh, $state, $scalar, $check) {
+    use ($spySend, $refresh, $state, $tables, $check) {
     $refresh(); $before = $state();
     $response = $spySend($fields);
     $check(is_string($response) && strpos($response, '|flt_spies=') === false
       && ($expected === null || $response === $expected), $message . ': expected an AJAX error response');
     $check($state() === $before, $message . ': no fleet, fuel, ships or unrelated rows may change');
-    $check(!db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0,
+    $check(!db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 0,
       $message . ': the sender must close only its own transaction');
   };
   foreach ([['galaxy' => '1'], ['mission' => (string) MT_ATTACK], ['planet_type' => '3'],
@@ -250,34 +189,48 @@ try {
   $response = $spySend();
   $check(strpos($response, '|flt_spies=') === false && $state() === $before,
     'Reconnaissance inside a caller transaction must be rejected without writing.');
-  $check(db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 1,
+  $check(db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 1,
     'A rejected nested reconnaissance must leave the caller transaction intact.');
   db_mysql::db_transaction_rollback();
   $db->query("UPDATE {$prefix}planets SET deuterium = 0 WHERE id = {$sourceId}");
   $spyRejected([], 'Reconnaissance without fuel');
   $db->query("UPDATE {$prefix}planets SET deuterium = 1000000000 WHERE id = {$sourceId}");
-  $spyRejected(['planet' => '2'], 'Reconnaissance still requires an actual planet');
+  $spyRejected(['planet' => '2'], 'Reconnaissance still requires an actual planet', $lang['zero_galaxy_spy_missing']);
   $db->query("UPDATE {$prefix}users SET total_points = 0 WHERE id = {$npcId}");
   $db->query("UPDATE {$prefix}users SET user_bot = 0 WHERE id = {$npcId}");
   $spyRejected([], 'Ordinary players must retain native weak-player protection', $lang['fl_attack_error'][ATTACK_NOOB]);
-  $db->query("UPDATE {$prefix}users SET user_bot = " . Storage::NPC_BOT_TYPE . " WHERE id = {$npcId}");
+  $db->query("UPDATE {$prefix}users SET user_bot = " . Npc::BOT_TYPE . " WHERE id = {$npcId}");
   $db->query("DELETE FROM {$prefix}zero_galaxy_npcs WHERE owner_id = {$npcId}");
   $spyRejected([], 'A bot marker without module ownership cannot bypass point protection', $lang['fl_attack_error'][ATTACK_NOOB]);
   $db->query("INSERT INTO {$prefix}zero_galaxy_npcs (owner_id,category_key) VALUES ({$npcId},'tiny')");
   $refresh();
-  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $beforeFleets = (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets");
   $response = $spySend(['shipcount' => '1']);
   $check(strpos($response, '|flt_spies=49') !== false
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
+    && (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
     'Registered NPCs with zero ranking points remain available for reconnaissance.');
   $db->query("UPDATE {$prefix}unit SET unit_level = 50 WHERE unit_location_type = 1
     AND unit_location_id = {$sourceId} AND unit_snid = " . SHIP_SPY);
   $db->query("UPDATE {$prefix}users SET total_points = 1000000 WHERE id = {$npcId}");
 
-  $probeUnit = (int) $scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_location_type = 1
+  $probeUnit = (int) $tables->scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_location_type = 1
     AND unit_location_id = {$sourceId} AND unit_snid = " . SHIP_SPY);
   $db->query("UPDATE {$prefix}unit SET unit_level = 0 WHERE unit_id = {$probeUnit}");
   $spyRejected([], 'Reconnaissance without probes');
+  $db->query("UPDATE {$prefix}planets SET metal = 0, last_update = " . (SN_TIME_NOW - 3600)
+    . ', que_processed = ' . (SN_TIME_NOW - 10) . " WHERE id = {$sourceId}");
+  $db->query("INSERT INTO {$prefix}que
+    (que_player_id,que_planet_id,que_type,que_time_left,que_unit_id,que_unit_amount,que_unit_mode,que_unit_time)
+    VALUES ({$actorId},{$sourceId}," . QUE_HANGAR . ',1,' . SHIP_SPY . ',2,' . BUILD_CREATE . ',1)');
+  $refresh();
+  $response = $spySend(['shipcount' => '2']);
+  $queuedFleet = $tables->one("SELECT fleet_array FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $updatedSource = $tables->one("SELECT metal,last_update FROM {$prefix}planets WHERE id = {$sourceId}");
+  $check(strpos($response, '|flt_spies=0') !== false
+    && sys_unit_str2arr($queuedFleet['fleet_array']) === [SHIP_SPY => 2]
+    && (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}que") === 0
+    && (float) $updatedSource['metal'] > 0 && (int) $updatedSource['last_update'] === SN_TIME_NOW,
+    'Quick reconnaissance must finish overdue shipyard orders and accrue source income before selecting ships.');
   $db->query("UPDATE {$prefix}unit SET unit_level = 50 WHERE unit_id = {$probeUnit}");
   $db->query("CREATE TRIGGER {$prefix}reject_unit BEFORE UPDATE ON {$prefix}unit FOR EACH ROW
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Spy sender rollback test'");
@@ -288,21 +241,21 @@ try {
 
   SN::$user_options = [PLAYER_OPTION_FLEET_SPY_DEFAULT => 4];
   $refresh();
-  $spySourceBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
-  $spyTargetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}");
-  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $spySourceBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $spyTargetBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}");
+  $beforeFleets = (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets");
   $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at = " . (SN_TIME_NOW - 1)
     . ", closes_at = " . SN_TIME_NOW . " WHERE rift_id = {$riftId}");
   $db->query("UPDATE {$prefix}users SET user_bot = 0, parent_account_id = 12345, parent_account_global = 12345 WHERE id = {$npcId}");
-  $response = $spySend(['rift_id' => (string) ($riftId + 999)], true);
+  $response = $spySend([], true);
   $db->query("UPDATE {$prefix}zero_galaxy_rifts SET unstable_at = {$unstable}, closes_at = {$closes} WHERE rift_id = {$riftId}");
-  $db->query("UPDATE {$prefix}users SET user_bot = " . Storage::NPC_BOT_TYPE
+  $db->query("UPDATE {$prefix}users SET user_bot = " . Npc::BOT_TYPE
     . ", parent_account_id = 0, parent_account_global = 0 WHERE id = {$npcId}");
-  SN::$user_options = $originalUserOptions;
-  $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  SN::$user_options = $original[4];
+  $spyFleet = $tables->one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
   $check(strpos($response, '|flt_spies=46') !== false
-    && (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
-    'The native default probe count must launch against an existing planet without consulting rift ID, phase or NPC markers.');
+    && (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1,
+    'The native default probe count must launch against an existing planet without consulting the phase or NPC markers.');
   $check((int) $spyFleet['fleet_mission'] === MT_SPY
     && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 4]
     && (int) $spyFleet['fleet_start_planet_id'] === $sourceId
@@ -312,38 +265,38 @@ try {
   $spyTravel = flt_travel_data($user, $spySourceBefore, $spyTargetBefore, [SHIP_SPY => 4], 10, [], Universe::getBaseGalaxyDistance());
   $check((int) $spyFleet['fleet_start_time'] === SN_TIME_NOW + (int) $spyTravel['duration']
     && (int) $spyFleet['fleet_end_time'] === SN_TIME_NOW + 2 * (int) $spyTravel['duration']
-    && (int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+    && (int) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
       === (int) $spySourceBefore['deuterium'] - (int) $spyTravel['consumption'],
     'Reconnaissance must use the one-galaxy distance and debit its native fuel exactly once.');
-  $check($one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}") === $spyTargetBefore,
+  $check($tables->one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}") === $spyTargetBefore,
     'Launching reconnaissance must leave the target resources and garrison unchanged.');
   $refresh();
   $response = $spySend(['shipcount' => '999']);
-  $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  $spyFleet = $tables->one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
   $check(strpos($response, '|flt_spies=0') !== false
     && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 46]
-    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$probeUnit}") === 0,
+    && (int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$probeUnit}") === 0,
     'Requested probes must clamp to the owned count and report the correct remaining amount.');
   $db->query("UPDATE {$prefix}unit SET unit_level = 50 WHERE unit_id = {$probeUnit}");
   $refresh();
-  $sourceBeforeFailure = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
-  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
-  $fault = new DispatchRefreshFailure($originalDb, $sourceId);
+  $sourceBeforeFailure = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $beforeFleets = (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $fault = new ZgRefreshFailure($original[0], $sourceId);
   SN::$db = $fault;
   try { $response = $spySend(['shipcount' => '7']); }
-  finally { SN::$db = $originalDb; }
-  $spyFleet = $one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
+  finally { SN::$db = $original[0]; }
+  $spyFleet = $tables->one("SELECT * FROM {$prefix}fleets ORDER BY fleet_id DESC LIMIT 1");
   $check($fault->failures === 1 && strpos($response, '|flt_spies=43') !== false,
     'A post-COMMIT read failure must still report reconnaissance success and the locked remaining probes.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1
+  $check((int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1
     && sys_unit_str2arr($spyFleet['fleet_array']) === [SHIP_SPY => 7]
-    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$probeUnit}") === 43,
+    && (int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$probeUnit}") === 43,
     'A committed reconnaissance must create one fleet and subtract its probes exactly once despite display failure.');
   $spyTravel = flt_travel_data($user, $sourceBeforeFailure, $spyTargetBefore, [SHIP_SPY => 7], 10, [], Universe::getBaseGalaxyDistance());
-  $check((int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+  $check((int) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
       === (int) $sourceBeforeFailure['deuterium'] - (int) $spyTravel['consumption']
     && (int) $planetrow['deuterium'] === (int) $sourceBeforeFailure['deuterium'] - (int) $spyTravel['consumption']
-    && !db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0,
+    && !db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 0,
     'The successful reconnaissance fallback must expose the exact committed fuel debit and leave no transaction open.');
   $_POST = [];
   $_SERVER['REQUEST_METHOD'] = 'GET';
@@ -356,10 +309,10 @@ try {
   $db->query("INSERT INTO {$prefix}captain (captain_unit_id, captain_level, captain_attack, captain_shield, captain_armor)
     VALUES ({$captainId}, 3, 1, 1, 1)");
   $refresh();
-  $sourceBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
-  $targetBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}");
+  $sourceBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $targetBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}");
   $result = $send([SHIP_SMALL_FIGHTER_LIGHT => 10]);
-  $fleet = $one("SELECT * FROM {$prefix}fleets WHERE fleet_id = " . $result['fleet_id']);
+  $fleet = $tables->one("SELECT * FROM {$prefix}fleets WHERE fleet_id = " . $result['fleet_id']);
   $check($result['fleet_id'] > 0 && $result['fleet'] === [SHIP_SMALL_FIGHTER_LIGHT => 10], 'A fleet exactly equal to the saved limit must launch successfully.');
   $check((int) $fleet['fleet_mission'] === MT_ATTACK && (int) $fleet['fleet_group'] === 0
     && sys_unit_str2arr($fleet['fleet_array']) === [SHIP_SMALL_FIGHTER_LIGHT => 10], 'A normal native solo attack fleet must persist its exact ship composition.');
@@ -370,26 +323,26 @@ try {
   $check((int) $fleet['fleet_start_time'] === $result['arrival'] && $result['arrival'] === SN_TIME_NOW + (int) $result['travel']['duration']
     && (int) $fleet['fleet_end_time'] === $result['return_at'] && $result['return_at'] === SN_TIME_NOW + 2 * (int) $result['travel']['duration'],
     'Native arrival and return timestamps must match server-calculated travel.');
-  $check((int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === 40,
+  $check((int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === 40,
     'Successful launch must subtract the exact native ship count once.');
-  $check((int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}") === (int) $sourceBefore['deuterium'] - (int) $result['travel']['consumption'],
+  $check((int) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}") === (int) $sourceBefore['deuterium'] - (int) $result['travel']['consumption'],
     'Successful launch must debit exactly the server-calculated fuel once.');
-  $check($one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}") === $targetBefore,
+  $check($tables->one("SELECT * FROM {$prefix}planets WHERE id = {$targetId}") === $targetBefore,
     'Launching an attack must not change the NPC garrison, loot or phase.');
   $check((float) $fleet['fleet_resource_metal'] === 0.0 && (float) $fleet['fleet_resource_crystal'] === 0.0
     && (float) $fleet['fleet_resource_deuterium'] === 0.0, 'An attack must not smuggle client resource cargo.');
-  $captain = $one("SELECT * FROM {$prefix}unit WHERE unit_id = {$captainId}");
+  $captain = $tables->one("SELECT * FROM {$prefix}unit WHERE unit_id = {$captainId}");
   $check((int) $captain['unit_location_type'] === LOC_PLANET && (int) $captain['unit_location_id'] === $sourceId,
     'A captain present at the source must stay there when the player did not select it.');
 
-  $computer = (int) $scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_player_id = {$actorId} AND unit_snid = " . TECH_COMPUTER);
+  $computer = (int) $tables->scalar("SELECT unit_id FROM {$prefix}unit WHERE unit_player_id = {$actorId} AND unit_snid = " . TECH_COMPUTER);
   $db->query("UPDATE {$prefix}unit SET unit_level = 0 WHERE unit_id = {$computer}");
   $rejected(function () use ($send) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1]); }, 'Native fleet slots exhausted');
   $db->query("UPDATE {$prefix}unit SET unit_level = 20 WHERE unit_id = {$computer}");
 
   $db->query("UPDATE {$prefix}users SET current_planet = {$alternateId} WHERE id = {$actorId}");
   $refresh();
-  $alternateBefore = $one("SELECT * FROM {$prefix}planets WHERE id = {$alternateId}");
+  $alternateBefore = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$alternateId}");
   $db->query("CREATE TRIGGER {$prefix}reject_captain BEFORE UPDATE ON {$prefix}unit FOR EACH ROW
     BEGIN IF OLD.unit_id = {$captainId} THEN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Captain assignment rollback test';
@@ -401,46 +354,46 @@ try {
   } finally { restore_error_handler(); ob_end_clean(); }
   $db->query("DROP TRIGGER {$prefix}reject_captain");
   $withCaptain = $send([SHIP_SMALL_FIGHTER_LIGHT => 2], 7, $captainId, $sourceId);
-  $captain = $one("SELECT * FROM {$prefix}unit WHERE unit_id = {$captainId}");
+  $captain = $tables->one("SELECT * FROM {$prefix}unit WHERE unit_id = {$captainId}");
   $check((int) $captain['unit_location_type'] === LOC_FLEET && (int) $captain['unit_location_id'] === $withCaptain['fleet_id'],
     'The selected native captain must be associated with that exact outgoing fleet.');
   $check((int) $withCaptain['source']['id'] === $sourceId
-    && $one("SELECT * FROM {$prefix}planets WHERE id = {$alternateId}") === $alternateBefore,
+    && $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$alternateId}") === $alternateBefore,
     'An explicitly signed source must remain authoritative after the player selects another current planet.');
-  $check((int) $scalar("SELECT current_planet FROM {$prefix}users WHERE id = {$actorId}") === $alternateId,
+  $check((int) $tables->scalar("SELECT current_planet FROM {$prefix}users WHERE id = {$actorId}") === $alternateId,
     'Sending from a signed source must not change the player selected-planet preference.');
   $rejected(function () use ($send, $captainId, $sourceId) { $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, $captainId, $sourceId); },
     'A captain already flying cannot be attached to another fleet');
   $refresh();
-  $sourceBeforeFailure = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
-  $shipsBeforeFailure = (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}");
-  $beforeFleets = (int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets");
-  $fault = new DispatchRefreshFailure($originalDb, $sourceId);
+  $sourceBeforeFailure = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $shipsBeforeFailure = (int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}");
+  $beforeFleets = (int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets");
+  $fault = new ZgRefreshFailure($original[0], $sourceId);
   SN::$db = $fault;
   try { $committed = $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId); }
-  finally { SN::$db = $originalDb; }
+  finally { SN::$db = $original[0]; }
   $check($fault->failures === 1 && $committed['fleet_id'] > 0,
     'A post-COMMIT read failure must return the already-created attacking fleet as a success.');
-  $check((int) $scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1
-    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === $shipsBeforeFailure - 1,
+  $check((int) $tables->scalar("SELECT COUNT(*) FROM {$prefix}fleets") === $beforeFleets + 1
+    && (int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === $shipsBeforeFailure - 1,
     'An attack display failure must not trigger a second fleet or another ship deduction.');
-  $check((int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+  $check((int) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
       === (int) $sourceBeforeFailure['deuterium'] - (int) $committed['travel']['consumption']
     && (int) $planetrow['deuterium'] === (int) $sourceBeforeFailure['deuterium'] - (int) $committed['travel']['consumption']
-    && !db_mysql::$db_in_transaction && (int) $scalar('SELECT @@in_transaction') === 0,
+    && !db_mysql::$db_in_transaction && (int) $tables->scalar('SELECT @@in_transaction') === 0,
     'The attack fallback must retain the single committed fuel debit and leave the transaction closed.');
-  $check($one("SELECT * FROM {$prefix}users WHERE id = {$otherId}") === $foreignBefore
-    && $one("SELECT * FROM {$prefix}planets WHERE id = {$foreignId}") === $foreignPlanetBefore,
+  $check($tables->one("SELECT * FROM {$prefix}users WHERE id = {$otherId}") === $foreignBefore
+    && $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$foreignId}") === $foreignPlanetBefore,
     'Rejected and successful sends must preserve unrelated human users and planets.');
 
   $refresh();
-  $beforeSource = $one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
-  $beforeShips = (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}");
+  $beforeSource = $tables->one("SELECT * FROM {$prefix}planets WHERE id = {$sourceId}");
+  $beforeShips = (int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}");
   $first = $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId);
   $second = $send([SHIP_SMALL_FIGHTER_LIGHT => 1], 10, 0, $sourceId);
   $check($first['fleet_id'] !== $second['fleet_id']
-    && (int) $scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === $beforeShips - 2
-    && (int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
+    && (int) $tables->scalar("SELECT unit_level FROM {$prefix}unit WHERE unit_id = {$shipUnit}") === $beforeShips - 2
+    && (int) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id = {$sourceId}")
       === (int) $beforeSource['deuterium'] - (int) $first['travel']['consumption'] - (int) $second['travel']['consumption'],
     'Repeated accepted commands must create distinct fleets and debit each launch once.');
 
@@ -448,36 +401,33 @@ try {
     AND unit_location_id={$sourceId} AND unit_snid IN (" . SHIP_SMALL_FIGHTER_LIGHT . ',' . SHIP_SPY . ')');
   $db->query("INSERT INTO {$prefix}unit (unit_player_id,unit_location_type,unit_location_id,unit_type,unit_snid,unit_level)
     VALUES ({$actorId},1,{$sourceId},200," . SHIP_RECYCLER . ',5)');
-  $nativeSend = function (int $mission, array $ships, int $position = 1, int $type = PT_PLANET)
-    use ($settings, $sourceId) {
-    global $user;
-    return (new \ZeroGalaxy\FleetDispatchService(new \ZeroGalaxy\NativeDispatch()))->send(
-      new \ZeroGalaxy\DispatchContext($user, $settings, SN_TIME_NOW),
-      \ZeroGalaxy\DispatchRequest::flight(1,$position,$type,$mission,$ships,10,0,$sourceId));
+  $nativeSend = function (int $mission, array $ships, int $position = 1, int $type = PT_PLANET) use ($flight, $sourceId) {
+    return $flight($mission, $ships, $position, $type, 10, 0, $sourceId);
   };
   foreach ([
     [MT_ATTACK,2,PT_PLANET,[SHIP_SMALL_FIGHTER_LIGHT=>2]],
     [MT_SPY,3,PT_PLANET,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_SPY=>2]],
   ] as [$mission,$position,$type,$ships]) {
     $refresh();
-    $beforeSource=$one("SELECT * FROM {$prefix}planets WHERE id={$sourceId}");
+    $beforeSource=$tables->one("SELECT * FROM {$prefix}planets WHERE id={$sourceId}");
     $result=$nativeSend($mission,$ships,$position,$type);
-    $row=$one("SELECT * FROM {$prefix}fleets WHERE fleet_id=" . $result->dispatch['fleet_id']);
+    $row=$tables->one("SELECT * FROM {$prefix}fleets WHERE fleet_id=" . $result->dispatch['fleet_id']);
     $check($row['fleet_end_planet_id'] === null && (int) $row['fleet_target_owner'] === 0
       && (int) $row['fleet_end_galaxy'] === 0 && (int) $row['fleet_end_planet'] === $position
       && (int) $row['fleet_end_type'] === $type && sys_unit_str2arr($row['fleet_array']) === $ships,
       'Native form flights must preserve selected composition and coordinates without inventing a target planet.');
     $check((int) $result->travel['distance'] === (int) Universe::getBaseGalaxyDistance()
-      && (int) $scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}")
+      && (int) $tables->scalar("SELECT deuterium FROM {$prefix}planets WHERE id={$sourceId}")
         === (int) $beforeSource['deuterium']-(int) $result->travel['consumption'],
       'Every empty-coordinate mission must use and debit the actual fixed-distance flight.');
   }
   $db->query("UPDATE {$prefix}planets SET debris_metal=1000 WHERE id={$targetId}");
   $refresh();
   $result=$nativeSend(MT_RECYCLE,[SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1],1,PT_DEBRIS);
-  $check($result->fleet === [SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1]
-    && (int) $result->target->planet['id'] === $targetId,
-    'Mixed recycler fleets can depart for an existing debris field.');
+  $check($result->fleet === [SHIP_SMALL_FIGHTER_LIGHT=>1,SHIP_RECYCLER=>1] && (int) $result->target['id'] === $targetId
+    && $result->remaining === 4, 'Mixed recycler fleets can depart for an existing debris field.');
+  $rejected(function () use ($nativeSend) { $nativeSend(MT_RECYCLE,[SHIP_RECYCLER=>1],2,PT_DEBRIS); },
+    'Recyclers from the form still need an existing debris field', null, \ZeroGalaxy\DispatchFailure::class);
   $rejected(function () use ($nativeSend) { $nativeSend(MT_SPY,[SHIP_SPY=>51],2); },
     'Native form probe counts must be validated rather than silently clamped');
   $db->query("UPDATE {$prefix}planets SET deuterium=0 WHERE id={$sourceId}");
@@ -493,16 +443,8 @@ try {
     'Native empty-coordinate attacks still require a fleet slot');
   echo "Attack and spy senders: {$assertions} assertions passed; native helpers used and isolated tables cleaned.\n";
 } finally {
-  SN::$db = $originalDb;
-  if (db_mysql::$db_in_transaction) { db_mysql::db_transaction_rollback(); }
-  elseif ((int) $scalar('SELECT @@in_transaction') !== 0) { $db->rollback(); }
-  SN::$db->db_prefix = $originalPrefix;
-  SN::$db->schema()->clear();
-  DBStaticUnit::cache_clear();
-  SN::$sys_user_logged_in = $originalLoggedIn;
-  SN::$user_options = $originalUserOptions;
-  $user = $originalUser; $planetrow = $originalPlanet;
-  $db->query('SET FOREIGN_KEY_CHECKS = 0');
-  foreach ($tables as $table) { $db->query("DROP TABLE IF EXISTS {$prefix}{$table}"); }
-  $db->query('SET FOREIGN_KEY_CHECKS = 1');
+  SN::$db = $original[0];
+  $tables->restoreGame();
+  [, SN::$sys_user_logged_in, $user, $planetrow, SN::$user_options] = $original;
+  $tables->drop();
 }

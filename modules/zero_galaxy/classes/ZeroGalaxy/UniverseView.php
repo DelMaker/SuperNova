@@ -40,9 +40,9 @@ class UniverseView {
       }
 
       $riftId = (int) $rift['rift_id'];
-      $ownerId = (int) ($rift['owner_id'] ?? 0);
+      $ownerId = (int) ($rift['npc_owner_id'] ?? 0);
       $planetId = (int) ($rift['planet_id'] ?? 0);
-      $isPlanet = in_array($phase, ['active', 'unstable'], true) && $planetId > 0 && $ownerId > 0;
+      $isPlanet = Lifecycle::hasPlanet($phase) && $planetId > 0 && $ownerId > 0;
       if ($isPlanet && !array_key_exists($ownerId, $owners)) {
         $owners[$ownerId] = db_user_by_id($ownerId);
       }
@@ -54,15 +54,8 @@ class UniverseView {
         }
         $debris = self::debris($rift, $recyclers, $incomingCapacity[$position] ?? 0, $planetrow);
       }
-      $phaseLabel = (string) $lang['zero_galaxy_phase_' . $phase];
-      $profileMetadata = self::profileMetadata($rift);
-      if ($profileMetadata) {
-        $name = RiftName::forRift($rift, $phase, (string) ($lang['zero_galaxy_time']['locale'] ?? 'ru'));
-      } elseif ($phase === 'energy' || $phase === 'closed') {
-        $name = $phaseLabel;
-      } else {
-        $name = sprintf($lang['zero_galaxy_rift_name'], $riftId) . ($phase === 'active' ? '' : ' — ' . $phaseLabel);
-      }
+      $profile = Profile::read($rift);
+      $name = RiftName::forRift($rift, $phase, $lang);
       $image = $phase === 'energy' ? 'object_in_space' : 'black_planet';
       if ($isPlanet) {
         $image = in_array($rift['image'], Lifecycle::IMAGES, true) ? $rift['image'] : Lifecycle::IMAGES[0];
@@ -81,15 +74,19 @@ class UniverseView {
       ], $debris);
       $metadata[] = array_merge([
         'id' => $riftId, 'position' => $position, 'phase' => $phase, 'name' => $name,
-        'phaseLabel' => $phaseLabel, 'canSpy' => $canSpy,
-        'canAttack' => $canSpy && !empty($profileMetadata),
+        'phaseLabel' => (string) $lang['zero_galaxy_phase_' . $phase], 'canSpy' => $canSpy,
+        'canAttack' => $canSpy && $profile !== null,
         'canRecycle' => !empty($debris['DEBRIS_WILL_GATHER']),
         'attackUrl' => SN_ROOT_RELATIVE . 'fleet.php?galaxy=0&system=' . $system . '&planet=' . $position
           . '&planet_type=' . PT_PLANET . '&target_mission=' . MT_ATTACK,
         'imageUrl' => SN_ROOT_RELATIVE . $module->getRootRelative() . 'design/images/phases/' . $phase . '.png?v=' . rawurlencode($module->getVersion()),
         'nextAt' => Lifecycle::nextTransition($rift, $now),
         'nextLabel' => (string) $lang[$phase === 'closed' ? 'zero_galaxy_until_disappearance' : 'zero_galaxy_until_next_phase'],
-      ], $profileMetadata);
+      ], $profile === null ? [] : [
+        'category' => ['name' => $profile['category']['name'], 'color' => $profile['category']['color']],
+        // Keep all decimal digits when the configured limit exceeds JS safe integers.
+        'fleetLimit' => (string) $profile['fleet_limit'],
+      ]);
     }
 
     for ($position = 1; $position <= $maxPlanet; $position++) {
@@ -112,17 +109,7 @@ class UniverseView {
       'now' => $now,
       'refreshSeconds' => max(2, (int) ($settings['refresh_seconds'] ?? 30)),
       'rifts' => $metadata,
-      'spyUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_spy',
-      'spyMission' => MT_SPY, 'planetType' => PT_PLANET, 'spyCount' => $spyCount,
-      'recycleUrl' => SN_ROOT_RELATIVE . 'index.php?page=zero_galaxy_recycle',
-      'recycleMission' => MT_RECYCLE, 'debrisType' => PT_DEBRIS,
       'labels' => [
-        'badRequest' => (string) $lang['zero_galaxy_spy_bad_request'],
-        'missing' => (string) $lang['zero_galaxy_spy_missing'],
-        'failed' => (string) $lang['zero_galaxy_spy_failed'],
-        'recycleBadRequest' => (string) $lang['zero_galaxy_recycle_bad_request'],
-        'recycleMissing' => (string) $lang['zero_galaxy_recycle_missing'],
-        'recycleFailed' => (string) $lang['zero_galaxy_recycle_failed'],
         'category' => (string) $lang['zero_galaxy_category'],
         'fleetLimit' => (string) $lang['zero_galaxy_fleet_limit'],
         'points' => (string) $lang['zero_galaxy_points_short'],
@@ -185,13 +172,11 @@ class UniverseView {
     return $capacity;
   }
 
-  /** Use native source-fleet/fuel estimates with the module's fixed distance. */
   private static function debris(array $rift, array $recyclers, $reserved, array $source): array {
     $total = $rift['debris_metal'] + $rift['debris_crystal'];
     $available = max(0, $total - $reserved);
-    $source['galaxy'] = 1;
     $target = ['galaxy' => 0, 'system' => (int) $rift['system'], 'planet' => (int) $rift['position']];
-    $transport = flt_calculate_fleet_to_transport($recyclers, $available, $source, $target);
+    $transport = flt_calculate_fleet_to_transport($recyclers, $available, RiftGeometry::source($source), $target);
     $gather = max(0, min($transport['capacity'], $available));
     $reservedPercent = min(100, floor($reserved / $total * 100));
     return [
@@ -202,28 +187,6 @@ class UniverseView {
       'DEBRIS_WILL_GATHER_PERCENT' => $available ? floor($gather / $available * (100 - $reservedPercent)) : 0,
       'DEBRIS_GATHER_TOTAL' => $gather + $reserved,
       'DEBRIS_GATHER_TOTAL_PERCENT' => min(100, floor(($gather + $reserved) / $total * 100)),
-    ];
-  }
-
-  private static function profileMetadata(array $rift): array {
-    $profile = Profile::read($rift);
-    if (!$profile) {
-      return [];
-    }
-
-    $category = $profile['category'] ?? null;
-    $fleetLimit = $profile['fleet_limit'] ?? null;
-    if (!is_array($category) || !is_string($category['name'] ?? null)
-      || trim($category['name']) === '' || !is_string($category['color'] ?? null)
-      || !preg_match('/^#[0-9a-fA-F]{6}$/D', $category['color'])
-      || !is_int($fleetLimit) || $fleetLimit < 0) {
-      return [];
-    }
-
-    return [
-      'category' => ['name' => $category['name'], 'color' => $category['color']],
-      // Keep all decimal digits when the configured limit exceeds JS safe integers.
-      'fleetLimit' => (string) $fleetLimit,
     ];
   }
 

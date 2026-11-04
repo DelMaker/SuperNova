@@ -7,8 +7,8 @@ use Fleet\FleetDispatchEvent;
 use SN;
 
 class RiftAttackEvent extends RiftMissionEvent {
-  public function __construct(FleetDispatchEvent $event, int $legacyOwnerId, bool $metadataAvailable = true) {
-    parent::__construct($event, $legacyOwnerId, $metadataAvailable);
+  public function __construct(FleetDispatchEvent $event, bool $metadataAvailable = true) {
+    parent::__construct($event, $metadataAvailable);
     if ($this->missionId !== MT_ATTACK || !empty($this->fleet['fleet_group'])) {
       // Native HOLD/EXPLORE skip refresh; use a no-op to return forbidden missions.
       $this->missionId = MT_NONE;
@@ -77,28 +77,29 @@ class RiftAttackEvent extends RiftMissionEvent {
   private function returnWithoutCombat(bool $overLimit = false): void {
     DbFleetStatic::fleet_send_back($this->fleet);
     if (!empty($this->fleet['fleet_group'])) {
-      $prefix = SN::$db->db_prefix;
-      $this->query("UPDATE `{$prefix}fleets` SET fleet_group=0 WHERE fleet_id=" . (int) $this->fleet['fleet_id'] . " AND fleet_end_galaxy=0");
+      $sql = Sql::fromGame();
+      $sql->query('UPDATE ' . $sql->table('fleets') . ' SET fleet_group = 0 WHERE fleet_id = '
+        . (int) $this->fleet['fleet_id'] . ' AND fleet_end_galaxy = 0');
     }
     if ($overLimit) {
       msg_send_simple_message($this->fleet['fleet_owner'], '', SN_TIME_NOW, MSG_TYPE_COMBAT,
-        SN::$lang['sys_mess_qg'] ?? 'Штаб флота', SN::$lang['zero_galaxy_title'] ?? 'Нулевая галактика',
-        AttackPolicy::OVER_LIMIT, STRING_NEED_ESCAPING, true);
+        SN::$lang['sys_mess_qg'], SN::$lang['zero_galaxy_title'], SN::$lang[AttackPolicy::OVER_LIMIT],
+        STRING_NEED_ESCAPING, true);
     }
     $this->finish();
   }
 
   private function markUnstable(): void {
-    $prefix = SN::$db->db_prefix;
+    $sql = Sql::fromGame();
     $riftId = (int) $this->lockedRift['rift_id'];
     $planetId = (int) $this->lockedRift['planet_id'];
     $ownerId = $this->targetOwnerId();
     $now = (int) SN_TIME_NOW;
-    $this->query("UPDATE `{$prefix}zero_galaxy_rifts` SET unstable_at = LEAST(unstable_at, {$now})
+    $sql->query('UPDATE ' . $sql->table('zero_galaxy_rifts') . " SET unstable_at = LEAST(unstable_at, {$now})
       WHERE rift_id = {$riftId} AND planet_id = {$planetId}");
-    $this->query("UPDATE `{$prefix}zero_galaxy_state` SET next_tick_at = LEAST(next_tick_at, {$now}) WHERE id = 1");
-    $name = SN::$db->link->real_escape_string(RiftName::forRift($this->lockedRift, 'unstable'));
-    $this->query("UPDATE `{$prefix}planets` SET name = '{$name}' WHERE id = {$planetId} AND id_owner = {$ownerId} AND galaxy = 0");
+    $sql->query('UPDATE ' . $sql->table('zero_galaxy_state') . " SET next_tick_at = LEAST(next_tick_at, {$now}) WHERE id = 1");
+    $name = $sql->escape(RiftName::forRift($this->lockedRift, 'unstable'));
+    $sql->query('UPDATE ' . $sql->table('planets') . " SET name = '{$name}'
+      WHERE id = {$planetId} AND id_owner = {$ownerId} AND galaxy = 0");
   }
-
 }

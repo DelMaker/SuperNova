@@ -1,22 +1,10 @@
 <?php
 
-if (PHP_SAPI !== 'cli') {
-  http_response_code(404);
-  exit;
-}
-
-require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Settings.php';
-require_once dirname(__DIR__) . '/classes/ZeroGalaxy/Profile.php';
+require __DIR__ . '/support/bootstrap.php';
 
 use ZeroGalaxy\Profile;
 use ZeroGalaxy\Settings;
 
-require __DIR__ . '/support/assertions.php';
-$expectFailure = function (callable $callable, string $message) use ($check) {
-  try { $callable(); }
-  catch (RuntimeException $error) { $check(true, $message); return; }
-  $check(false, $message);
-};
 $rates = [901 => 1, 902 => 2, 903 => 4];
 $info = [
   202 => ['type' => 200, 'cost' => 7, 'max' => 0],
@@ -50,12 +38,21 @@ $check($profile['garrison_points'] === 991 && $profile['fleet_limit'] === 1238, 
 $check($profile['resources'] === [901 => 267, 902 => 55, 903 => 16], 'Loot must use 75% of actual fleet cost and weighted 60/25/15 shares.');
 $check(!array_key_exists('tech', $profile), 'Category research must stay out of the immutable planet profile.');
 
-$legacy = $profile;
-$legacy['tech'] = [106 => 7, 109 => 5];
-$check(Profile::read(['config_snapshot' => json_encode(['profile' => $legacy])]) === $profile,
-  'Old profile research must be ignored without changing the remaining snapshot.');
-$check(Profile::read([]) === null && Profile::read(['config_snapshot' => '{bad json']) === null, 'Legacy or malformed snapshots must not be treated as populated profiles.');
-$check(Profile::read(['config_snapshot' => json_encode(['profile' => ['version' => 2]])]) === null, 'An unsupported profile format must not be applied.');
+$check(Profile::read(['config_snapshot' => json_encode(['profile' => $profile])]) === $profile,
+  'A created profile must be read back unchanged.');
+$check(Profile::read([]) === null && Profile::read(['config_snapshot' => '{bad json']) === null,
+  'Missing or malformed snapshots must not be treated as populated profiles.');
+foreach ([['version' => 2], ['fleet_limit' => -1], ['fleet_limit' => 1.0], ['fleet_limit' => '1238'],
+  ['category' => ['color' => 'red']], ['category' => ['name' => '  ']], ['category' => ['key' => 7]],
+  ['fleet' => 'none'], ['resources' => null]] as $broken) {
+  $snapshot = ['profile' => array_replace_recursive($profile, $broken)];
+  $check(Profile::read(['config_snapshot' => json_encode($snapshot, JSON_PRESERVE_ZERO_FRACTION)]) === null,
+    'Every field the module relies on must be validated when reading: ' . json_encode($broken));
+}
+$incomplete = $profile;
+unset($incomplete['resources']);
+$check(Profile::read(['config_snapshot' => json_encode(['profile' => $incomplete])]) === null,
+  'A profile without its materializable resources must not be applied.');
 
 $selection = [
   'disabled' => ['weight' => 0, 'limit' => -1],
@@ -96,13 +93,13 @@ foreach ([0, 100] as $share) {
   $check($share === 0 ? ($sample['fleet'] === [] && array_sum($sample['resources']) === 0) : $sample['defence'] === [], 'Zero-budget armies must remain empty; loot cannot come from defence.');
 }
 foreach ([[901 => 0, 902 => 2, 903 => 4], [901 => 1, 902 => INF, 903 => 4], [901 => 1, 902 => 2]] as $invalidRates) {
-  $expectFailure(function () use ($category, $invalidRates, $resolver) {
+  zgExpect(function () use ($category, $invalidRates, $resolver) {
     Profile::create('tiny', $category, 1.25, $invalidRates, $resolver);
-  }, 'Missing, zero or infinite exchange rates must be rejected.');
+  }, RuntimeException::class, 'Missing, zero or infinite exchange rates must be rejected.');
 }
 $bad = $category; $bad['fleet_weights'] = [401 => 1];
-$expectFailure(function () use ($bad, $rates, $resolver) {
+zgExpect(function () use ($bad, $rates, $resolver) {
   Profile::create('tiny', $bad, 1.25, $rates, $resolver);
-}, 'The unit resolver must be able to reject a defence type in the fleet pool.');
+}, RuntimeException::class, 'The unit resolver must be able to reject a defence type in the fleet pool.');
 
 echo "Profile: {$assertions} assertions passed; no game bootstrap or database used.\n";

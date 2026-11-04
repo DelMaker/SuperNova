@@ -7,13 +7,11 @@ use RuntimeException;
 use SN;
 
 class AttackPolicy {
-  const OVER_LIMIT = 'Такой флот не сможет пролететь через разлом!';
+  const OVER_LIMIT = 'zero_galaxy_attack_over_limit';
   const TOKEN_TTL = 3600;
 
   public static function limit(array $rift): ?int {
-    $profile = Profile::read($rift);
-    $limit = $profile['fleet_limit'] ?? null;
-    return is_int($limit) && $limit >= 0 ? $limit : null;
+    return Profile::read($rift)['fleet_limit'] ?? null;
   }
 
   /** Match native fleet statistics: sum weighted costs, then floor once. */
@@ -65,16 +63,16 @@ class AttackPolicy {
     return self::ships($decoded === false ? null : json_decode($decoded, true));
   }
 
-  public static function token(int $userId, int $sourceId, int $riftId, int $issuedAt, string $key = null): string {
+  /** Signs the pilot and departure planet of a zero-galaxy fleet form; it is not a one-time key. */
+  public static function token(int $userId, int $sourceId, int $issuedAt, string $key = null): string {
     $key = $key ?? SN::$sn_secret_word;
-    if (strlen($key) < 16) { throw new RuntimeException('Zero Galaxy attack signing key is unavailable'); }
-    return hash_hmac('sha256', "zero-galaxy-attack:v1:{$userId}:{$sourceId}:{$riftId}:{$issuedAt}", $key);
+    if (strlen($key) < 16) { throw new RuntimeException('Zero Galaxy fleet form signing key is unavailable'); }
+    return hash_hmac('sha256', "zero-galaxy-fleet:v2:{$userId}:{$sourceId}:{$issuedAt}", $key);
   }
 
-  public static function validToken($token, int $issuedAt, int $userId, int $sourceId, int $riftId,
-    int $now, string $key = null): bool {
+  public static function validToken($token, int $issuedAt, int $userId, int $sourceId, int $now, string $key = null): bool {
     return is_string($token) && preg_match('/^[a-f0-9]{64}$/D', $token)
       && $issuedAt >= $now - self::TOKEN_TTL && $issuedAt <= $now
-      && hash_equals(self::token($userId, $sourceId, $riftId, $issuedAt, $key), $token);
+      && hash_equals(self::token($userId, $sourceId, $issuedAt, $key), $token);
   }
 }

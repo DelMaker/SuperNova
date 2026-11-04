@@ -13,7 +13,6 @@ class Settings {
   const MAX_POINTS = 4000000000000000;
 
   public static function load(array $overrides = []) {
-    unset($overrides['acs_enabled']);
     $defaults = require dirname(__DIR__, 2) . '/defaults.php';
     if (array_diff_key($overrides, $defaults)) {
       throw new InvalidArgumentException('Unknown zero galaxy setting');
@@ -32,17 +31,6 @@ class Settings {
     $settings['refresh_seconds'] = max(2, $settings['refresh_seconds']);
     $settings['fleet_limit_multiplier'] = self::number($settings['fleet_limit_multiplier'],
       'fleet_limit_multiplier', 0.01, 100);
-
-    foreach (['energy_seconds', 'active_seconds', 'unstable_seconds', 'closed_seconds'] as $key) {
-      if (!is_array($settings[$key]) || count($settings[$key]) !== 2) {
-        throw new InvalidArgumentException('Invalid range: ' . $key);
-      }
-      $range = array_values($settings[$key]);
-      $settings[$key] = [self::seconds($range[0], $key), self::seconds($range[1], $key)];
-      if ($settings[$key][0] > $settings[$key][1]) {
-        throw new InvalidArgumentException('Reversed range: ' . $key);
-      }
-    }
 
     if (!is_array($settings['categories'])) {
       throw new InvalidArgumentException('Invalid categories');

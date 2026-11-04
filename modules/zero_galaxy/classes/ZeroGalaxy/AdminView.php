@@ -2,33 +2,18 @@
 
 namespace ZeroGalaxy;
 
-use InvalidArgumentException;
-use mysqli;
-use RuntimeException;
-
 class AdminView {
   public static function appliesTo($template): bool {
     return defined('IN_ADMIN') && IN_ADMIN === true && is_object($template)
       && (new NativeTemplateAdapter($template))->isNative('userlist', 'admin/');
   }
 
-  public static function filter($template, mysqli $db, string $prefix): void {
+  public static function filter($template, Sql $sql): void {
     if (!self::appliesTo($template) || (new NativeTemplateAdapter($template))->value('ZERO_GALAXY_ADMIN_FILTERED')) {
       return;
     }
-    if (!preg_match('/^[a-zA-Z0-9_]*$/D', $prefix) || strlen($prefix) > 40) {
-      throw new InvalidArgumentException('Invalid database prefix');
-    }
-    // Registry membership alone must never hide an ordinary or promoted user.
     // Include offline NPCs because native duplicate-IP counts use all users.
-    $result = $db->query("SELECT u.id, u.user_lastip, u.user_as_ally FROM {$prefix}users u
-      WHERE u.id IN (SELECT owner_id FROM {$prefix}zero_galaxy_npcs
-        UNION SELECT npc_owner_id FROM {$prefix}zero_galaxy_state WHERE id = 1)
-        AND u.user_bot = " . Storage::NPC_BOT_TYPE . " AND u.authlevel = 0
-        AND u.parent_account_id = 0 AND u.parent_account_global = 0");
-    if ($result === false) {
-      throw new RuntimeException('Zero Galaxy admin visibility database error: ' . $db->error, $db->errno);
-    }
+    $result = $sql->query('SELECT u.id, u.user_lastip, u.user_as_ally FROM ' . Npc::fromSql($sql));
     $hidden = $ipCounts = [];
     while ($npc = $result->fetch_assoc()) {
       $hidden[(int) $npc['id']] = true;

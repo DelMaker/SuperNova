@@ -20,12 +20,27 @@ class Profile {
       throw new InvalidArgumentException($error->getMessage(), 0, $error);
     }
   }
+  /** The only validation of saved snapshots: callers rely on every field it checks. */
   public static function read(array $rift): ?array {
-    $snapshot = json_decode($rift['config_snapshot'] ?? '', true);
-    if (!isset($snapshot['profile']['version']) || $snapshot['profile']['version'] !== 1) { return null; }
-    $profile = $snapshot['profile'];
-    unset($profile['tech']);
+    $profile = json_decode($rift['config_snapshot'] ?? '', true)['profile'] ?? null;
+    $category = $profile['category'] ?? null;
+    if (($profile['version'] ?? null) !== 1 || !is_array($category) || !is_string($category['key'] ?? null)
+      || !is_string($category['name'] ?? null) || trim($category['name']) === ''
+      || !is_string($category['color'] ?? null) || !preg_match('/^#[0-9a-fA-F]{6}$/D', $category['color'])
+      || !is_int($profile['fleet_limit'] ?? null) || $profile['fleet_limit'] < 0
+      || !is_array($profile['fleet'] ?? null) || !is_array($profile['defence'] ?? null)
+      || !is_array($profile['resources'] ?? null)) {
+      return null;
+    }
     return $profile;
+  }
+
+  /** The metal-equivalent rates of eco_get_total_cost(), which prices every garrison unit. */
+  public static function nativeRates(): array {
+    $config = \SN::$config;
+    return [901 => (float) $config->rpg_exchange_metal,
+      902 => $config->rpg_exchange_crystal / $config->rpg_exchange_metal,
+      903 => $config->rpg_exchange_deuterium / $config->rpg_exchange_metal];
   }
 
   public static function choose(array $categories, array $counts): ?string {

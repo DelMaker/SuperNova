@@ -3,23 +3,23 @@
 namespace ZeroGalaxy;
 
 use Fleet\FleetDispatchEvent;
-use RuntimeException;
 use SN;
 
-/** Shared lifecycle locks and target identity for zero-galaxy arrivals. */
-abstract class RiftMissionEvent extends FleetDispatchEvent {
-  protected $legacyOwnerId;
+/**
+ * Zero-galaxy arrival with the shared lifecycle locks and current target identity.
+ * Reconnaissance and recycling then run in the native handlers unchanged.
+ */
+class RiftMissionEvent extends FleetDispatchEvent {
   protected $processed = false;
   protected $moduleRecordsLocked = false;
   protected $lockedRift;
   private $metadataAvailable;
 
-  public function __construct(FleetDispatchEvent $event, int $legacyOwnerId, bool $metadataAvailable = true) {
+  public function __construct(FleetDispatchEvent $event, bool $metadataAvailable = true) {
     // Keep native locks, ordering and snapshots without repeating its lookups.
     foreach (get_object_vars($event) as $name => $value) {
       $this->$name = $value;
     }
-    $this->legacyOwnerId = $legacyOwnerId;
     $this->metadataAvailable = $metadataAvailable;
   }
 
@@ -44,36 +44,34 @@ abstract class RiftMissionEvent extends FleetDispatchEvent {
     return $result;
   }
 
+  public function refreshMissionData() {
+    if ($this->isModuleTarget()) {
+      // The native refresh recomputes basic income even for planets without mines.
+      $sql = Sql::fromGame();
+      $sql->query('UPDATE ' . $sql->table('planets') . ' SET last_update = GREATEST(last_update, '
+        . (int) $this->eventTimeStamp . ') WHERE id = ' . (int) $this->dstPlanetId);
+    }
+    parent::refreshMissionData();
+  }
+
   private function lockModuleRecords(): bool {
-    $prefix = SN::$db->db_prefix;
-    if (!$this->metadataAvailable || !preg_match('/^[a-zA-Z0-9_]*$/D', $prefix)) {
+    if (!$this->metadataAvailable || !Sql::validPrefix(SN::$db->db_prefix)) {
       return false;
     }
+    $sql = Sql::fromGame();
     // SERIALIZABLE turns even plain SELECTs into locking reads. The shared
     // lifecycle mutex must precede every native owner/planet/fleet lock.
-    $state = $this->query("SELECT id FROM `{$prefix}zero_galaxy_state` WHERE id = 1 FOR UPDATE");
-    if (!$state->num_rows) {
+    if (!$sql->one('SELECT id FROM ' . $sql->table('zero_galaxy_state') . ' WHERE id = 1 FOR UPDATE')) {
       return false;
     }
-    $system = (int) $this->fleet['fleet_end_system'];
-    $position = (int) $this->fleet['fleet_end_planet'];
-    $this->lockedRift = $this->query("SELECT * FROM `{$prefix}zero_galaxy_rifts`
-      WHERE system = {$system} AND position = {$position} FOR UPDATE")->fetch_assoc();
+    $this->lockedRift = $sql->one('SELECT * FROM ' . $sql->table('zero_galaxy_rifts')
+      . ' WHERE system = ' . (int) $this->fleet['fleet_end_system']
+      . ' AND position = ' . (int) $this->fleet['fleet_end_planet'] . ' FOR UPDATE');
     return true;
   }
 
-  protected function query(string $sql) {
-    $result = SN::$db->link->query($sql);
-    if ($result === false) {
-      // A deadlock can roll back the transaction behind native DBAL flags.
-      // Never continue processing or fall back after losing the record locks.
-      throw new RuntimeException('Zero Galaxy mission database error: ' . SN::$db->link->error, SN::$db->link->errno);
-    }
-    return $result;
-  }
-
   protected function targetOwnerId(): int {
-    return RiftTarget::ownerId($this->lockedRift ?? [], $this->legacyOwnerId);
+    return (int) ($this->lockedRift['npc_owner_id'] ?? 0);
   }
 
   protected function isModuleTarget(): bool {
@@ -82,7 +80,7 @@ abstract class RiftMissionEvent extends FleetDispatchEvent {
     }
     $ownerId = $this->targetOwnerId();
     $owner = $ownerId ? db_user_by_id($ownerId) : null;
-    return RiftTarget::matches($this->lockedRift, $this->dstPlanetRow, $owner, $this->legacyOwnerId, SN_TIME_NOW);
+    return RiftTarget::matches($this->lockedRift, $this->dstPlanetRow, $owner, SN_TIME_NOW);
   }
 
   protected function finish(): void {

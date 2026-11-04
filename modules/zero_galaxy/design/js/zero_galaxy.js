@@ -17,7 +17,6 @@
     var rifts = {};
     var countdowns = [];
     var reloading = false;
-    var sending = false;
     var clock = window.performance && typeof window.performance.now === 'function'
       ? function () { return window.performance.now(); }
       : function () { return Date.now(); };
@@ -44,11 +43,6 @@
     if (planetTemplate) {
       removeAll('[go], .ownmissile, .ownharvest', planetTemplate);
     }
-    var harvestControls = container.querySelectorAll('#debris_template .ownharvest');
-    for (var harvest = 0; harvest < harvestControls.length; harvest++) {
-      // Override the blanket rule in an older compiled module template too.
-      harvestControls[harvest].style.setProperty('display', 'block', 'important');
-    }
     removeAll('[go="galaxy"][mode="name"], [href*="mode=name"]');
     var expedition = container.querySelector('.ownexpedition');
     if (expedition) {
@@ -66,39 +60,30 @@
     }
     removeAll('#user_template [go], #ally_template [go], #ally_template a');
 
-    function hasProfile(rift) {
-      var category = rift.category;
-      return !!(category && typeof category.name === 'string' && category.name.trim()
-        && typeof category.color === 'string' && category.color.length === 7
-        && /^#[0-9a-fA-F]{6}$/.test(category.color)
-        && typeof rift.fleetLimit === 'string' && /^\d+$/.test(rift.fleetLimit));
+    // Dark category colors need a light outline on the dark universe background.
+    function isDark(color) {
+      var luminance = [0.2126, 0.7152, 0.0722].reduce(function (sum, weight, index) {
+        var channel = parseInt(color.substr(1 + index * 2, 2), 16) / 255;
+        return sum + weight * (channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4));
+      }, 0);
+      return luminance < 0.15;
     }
 
     function profileDetails(rift) {
-      if (!hasProfile(rift)) {
-        return null;
-      }
-      var category = rift.category;
-
       var details = document.createElement('div');
       details.className = 'zero-galaxy-profile';
-      // Essential layout must also work with an older compiled module template.
-      details.style.cssText = 'display:block;margin-top:0.35em;font-size:0.9em;font-weight:normal;';
       var categoryText = document.createElement('span');
       categoryText.className = 'zero-galaxy-category';
-      categoryText.style.display = 'block';
       var indicator = document.createElement('span');
       indicator.className = 'zero-galaxy-category-color';
-      indicator.style.cssText = 'display:inline-block;width:0.8em;height:0.8em;border:1px solid #fff;border-radius:50%;box-sizing:border-box;margin-right:0.4em;vertical-align:middle;';
-      indicator.style.backgroundColor = category.color;
+      indicator.style.backgroundColor = rift.category.color;
       indicator.setAttribute('aria-hidden', 'true');
       categoryText.appendChild(indicator);
-      categoryText.appendChild(document.createTextNode(config.labels.category + ': ' + category.name));
+      categoryText.appendChild(document.createTextNode(config.labels.category + ': ' + rift.category.name));
       details.appendChild(categoryText);
 
       var limit = document.createElement('span');
       limit.className = 'zero-galaxy-fleet-limit';
-      limit.style.cssText = 'display:block;margin-top:0.2em;white-space:nowrap;font-variant-numeric:tabular-nums;';
       var formattedLimit = rift.fleetLimit.replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
       limit.textContent = config.labels.fleetLimit + ': ' + formattedLimit + ' ' + config.labels.points;
       details.appendChild(limit);
@@ -118,8 +103,6 @@
       var phaseObject = row.querySelector('.uni_show_planet[planet_type="1"]');
       var phaseImage = phaseObject && phaseObject.querySelector('img');
       if (phaseImage && rift.imageUrl) {
-        // Also override dimming from an older compiled module template.
-        phaseObject.style.opacity = '1';
         phaseImage.setAttribute('src', rift.imageUrl);
         phaseImage.setAttribute('alt', rift.name || rift.phaseLabel);
       }
@@ -129,17 +112,15 @@
       }
       var name = row.querySelector('.g_galaxy_row');
       if (name) {
-        var hasCategory = hasProfile(rift);
         var nameText = name.querySelector('span[planet_type="1"]');
-        if (hasCategory && nameText) {
+        if (rift.category && nameText) {
           nameText.style.setProperty('color', rift.category.color, 'important');
-          if (rift.category.color.toLowerCase() === '#7b2cbf') {
+          if (isDark(rift.category.color)) {
             nameText.style.textShadow = '0 0 2px rgba(255,255,255,0.85)';
           }
         }
         var details = document.createElement('div');
         details.className = 'zero-galaxy-next';
-        details.style.cssText = 'display:block;margin-top:0.35em;font-size:0.9em;font-weight:normal;';
         details.appendChild(document.createTextNode(rift.nextLabel + ': '));
         var countdown = document.createElement('span');
         countdown.className = 'zero-galaxy-countdown';
@@ -188,25 +169,19 @@
             image.setAttribute('src', rift.imageUrl);
             image.setAttribute('alt', rift.name || rift.phaseLabel);
           }
-          var popupProfile = profileDetails(rift);
           var popupTable = content.querySelector('table.planet_template');
-          if (popupProfile && popupTable) {
-            var profileRow = popupTable.insertRow(1);
-            var profileCell = profileRow.insertCell(0);
+          if (rift.category && popupTable) {
+            var profileCell = popupTable.insertRow(1).insertCell(0);
             profileCell.colSpan = 2;
-            profileCell.appendChild(popupProfile);
+            profileCell.appendChild(profileDetails(rift));
           }
-          if (rift.canAttack && hasProfile(rift) && rift.attackUrl
-            && (rift.phase === 'active' || rift.phase === 'unstable')) {
-            var actions = content.querySelector('td[planet_planet][planet_type="1"]');
-            if (actions) {
-              var attack = document.createElement('a');
-              attack.className = 'zero-galaxy-attack button_pseudo';
-              attack.style.cssText = 'display:block;margin-bottom:0.35em;';
-              attack.href = rift.attackUrl;
-              attack.textContent = config.labels.attack;
-              actions.insertBefore(attack, actions.firstChild);
-            }
+          var actions = rift.canAttack && content.querySelector('td[planet_planet][planet_type="1"]');
+          if (actions) {
+            var attack = document.createElement('a');
+            attack.className = 'zero-galaxy-attack button_pseudo';
+            attack.href = rift.attackUrl;
+            attack.textContent = config.labels.attack;
+            actions.insertBefore(attack, actions.firstChild);
           }
           popup.html = content.innerHTML;
         }
@@ -239,72 +214,6 @@
       }
     }, true);
 
-    function notify(message, failed) {
-      if (typeof window.addToTable === 'function') {
-        window.addToTable(message, failed ? 1 : 0);
-      }
-      var source = container.querySelector('#message_template');
-      if (source && typeof window.popup_show === 'function') {
-        var text = document.createElement('span');
-        text.textContent = message;
-        window.popup_show(source.innerHTML.replace(/\[MESSAGE\]/g, function () { return text.innerHTML; })
-          .replace(/\[CLASS\]/g, failed ? 'error_bg' : 'ok_bg'));
-      }
-    }
-
-    var nativeDoit = window.doit;
-    window.doit = function (missionId, position, planetType, shipcount) {
-      if (Number(window.uni_galaxy) !== 0) {
-        return typeof nativeDoit === 'function' ? nativeDoit.apply(this, arguments) : false;
-      }
-      var rift = rifts[Number(position)];
-      var recycle = Number(missionId) === Number(config.recycleMission);
-      var validMission = recycle ? Number(planetType) === Number(config.debrisType)
-        : Number(missionId) === Number(config.spyMission) && Number(planetType) === Number(config.planetType);
-      if (!validMission) {
-        notify(recycle ? config.labels.recycleBadRequest : config.labels.badRequest, true);
-        return false;
-      }
-      if (!rift || !(recycle ? rift.canRecycle : rift.canSpy)) {
-        notify(recycle ? config.labels.recycleMissing : config.labels.missing, true);
-        return false;
-      }
-      if (sending) {
-        return false;
-      }
-      sending = true;
-      var request = {
-        galaxy: 0, system: Number(window.uni_system), planet: Number(position),
-        planet_type: Number(recycle ? config.debrisType : config.planetType),
-        mission: Number(recycle ? config.recycleMission : config.spyMission)
-      };
-      if (!recycle) {
-        request.shipcount = Math.max(1, Math.floor(Number(shipcount) || Number(config.spyCount)));
-      }
-      window.jQuery.post(recycle ? config.recycleUrl : config.spyUrl, request, function (response) {
-        var parts = String(response).split('|');
-        var counterName = recycle ? 'flt_recyclers' : 'flt_spies';
-        var counter = parts.length > 1 && parts[1].match(new RegExp('^' + counterName + '=(\\d+)$'));
-        var success = !!counter;
-        if (success) {
-          var counterElement = document.getElementById(counterName);
-          if (counterElement) {
-            counterElement.textContent = counter[1];
-          }
-          if (recycle) {
-            // Incoming capacity changed. Refresh after the native success popup.
-            reloadAt = Math.min(reloadAt, now() + 2);
-          }
-        }
-        notify(parts[0], !success);
-      }, 'text').fail(function () {
-        notify(recycle ? config.labels.recycleFailed : config.labels.failed, true);
-      }).always(function () {
-        sending = false;
-      });
-      return false;
-    };
-
     function now() {
       return serverNow + Math.max(0, clock() - startedAt) / 1000;
     }
@@ -335,7 +244,7 @@
       }
       var focused = document.activeElement;
       var editing = focused && (focused.id === 'galaxy' || focused.id === 'system');
-      if (!reloading && !sending && currentTime >= reloadAt && !document.hidden && !editing) {
+      if (!reloading && currentTime >= reloadAt && !document.hidden && !editing) {
         reloading = true;
         window.location.reload();
       }
