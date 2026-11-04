@@ -135,7 +135,7 @@ class zero_galaxy extends sn_module {
     if ($page === 4 && $fleetId > 0) {
       $fleet = SN::$db->doquery('SELECT fleet_end_galaxy FROM {{fleets}} WHERE fleet_id=' . $fleetId, true);
       if ($fleet && (int) $fleet['fleet_end_galaxy'] === 0) {
-        SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title']);
+        SnTemplate::messageBox(SN::$lang['zero_galaxy_acs_disabled'], SN::$lang['zero_galaxy_title'], '', 0, false);
       }
     }
   }
